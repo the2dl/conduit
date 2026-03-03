@@ -1,0 +1,10 @@
+# conduit docker configuration
+# Dragonfly URL uses the compose service name
+listen_addr = "0.0.0.0:8080"
+api_addr = "0.0.0.0:8443"
+dragonfly_url = "redis://dragonfly:6379"
+cert_cache_size = 10000
+log_channel_size = 10000
+redis_pool_size = 16
+auth_required = false
+log_retention = 100000

@@ -1,0 +1,15 @@
+# Just Dragonfly — proxy and API run locally for fast iteration
+services:
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
+    container_name: conduit-dragonfly
+    ports:
+      - "6380:6379"
+    volumes:
+      - conduit_dragonfly:/data
+    ulimits:
+      memlock: -1
+    restart: unless-stopped
+
+volumes:
+  conduit_dragonfly:

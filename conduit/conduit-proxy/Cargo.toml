@@ -1,0 +1,65 @@
+[package]
+name = "conduit-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "conduit-proxy"
+path = "src/main.rs"
+
+[dependencies]
+conduit-common = { path = "../conduit-common" }
+
+# Pingora
+pingora = { workspace = true }
+pingora-core = { workspace = true }
+pingora-proxy = { workspace = true }
+pingora-boringssl = { workspace = true }
+pingora-http = { workspace = true }
+pingora-error = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Redis
+deadpool-redis = { workspace = true }
+redis = { workspace = true }
+
+# TLS
+boring = { workspace = true }
+boring-sys = { workspace = true }
+
+# Caching
+lru = { workspace = true }
+parking_lot = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Misc
+chrono = { workspace = true }
+pingora-runtime = { path = "../../pingora/pingora-runtime" }
+bytes = { workspace = true }
+http = { workspace = true }
+base64 = { workspace = true }
+once_cell = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true }
+httparse = { workspace = true }
+tokio-stream = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+bcrypt = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+jemallocator = "0.5"

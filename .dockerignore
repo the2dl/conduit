@@ -1,0 +1,7 @@
+target/
+.git/
+.claude/
+*.jsonl
+node_modules/
+cleargate-ui/node_modules/
+cleargate-ui/.svelte-kit/

@@ -1,0 +1,29 @@
+# Build
+/target/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# CA certs (generated locally)
+conduit-ca.crt
+conduit-ca.pem
+conduit-ca-key.pem
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node (conduit-ui)
+node_modules/
+
+# UI build output
+conduit-ui/build/

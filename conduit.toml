@@ -1,0 +1,73 @@
+# conduit MITM proxy configuration
+
+# Proxy listener address
+listen_addr = "0.0.0.0:8888"
+
+# Management API address
+api_addr = "0.0.0.0:8443"
+
+# Dragonfly (Redis-compatible) connection URL
+dragonfly_url = "redis://127.0.0.1:6379"
+
+# CA certificate and key paths (auto-generated if absent)
+# ca_cert_path = "/etc/conduit/ca.pem"
+# ca_key_path = "/etc/conduit/ca-key.pem"
+
+# Maximum number of cached per-domain TLS certificates
+cert_cache_size = 10000
+
+# Log channel buffer size (proxy never blocks on logging)
+log_channel_size = 10000
+
+# Redis connection pool size
+redis_pool_size = 16
+
+# Whether unauthenticated traffic should be rejected (407) or allowed with IP logging
+auth_required = true
+
+# Maximum number of log entries retained in Dragonfly
+log_retention = 100000
+
+# Number of worker threads (default: number of CPUs)
+# workers = 4
+
+# Syslog target (optional): udp://host:514 or tcp://host:514
+# syslog_target = "udp://syslog.example.com:514"
+
+# Path to the SvelteKit UI build directory (optional)
+ui_dir = "./conduit-ui/build"
+
+# TLS interception (MITM) — decrypt CONNECT tunnels to inspect full URLs
+# Set to false for passthrough mode (only logs CONNECT host:port, no URL details)
+tls_intercept = true
+
+# Custom block page HTML (optional). Use {{HOST}} and {{CATEGORY}} placeholders.
+# block_page_html = "<html><body>Blocked: {{HOST}}</body></html>"
+
+# Block requests when policy rules cannot be loaded (Redis down, no cache).
+# Default: true (fail-closed). Set to false to allow traffic when policy is unavailable.
+fail_closed = true
+
+# API key for management API authentication (optional).
+# When set, all non-health API requests require `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+# api_key = "your-secret-api-key"
+
+# --- Multi-Node Configuration ---
+# Uncomment and configure to run this proxy as a managed node.
+# Enrollment credentials are obtained via POST /api/v1/nodes on the control plane.
+#
+# [node]
+# node_id = "node-xxxxxxxxxxxx"
+# dragonfly_url = "redis://node-xxxxxxxxxxxx:password@controlplane:6379"
+# name = "proxy-east-1"
+# heartbeat_interval_secs = 10
+# enrollment_token = "one-time-token-from-enrollment"
+# hmac_key = "base64url-hmac-key-from-enrollment"
+
+# [node]
+# node_id = "node-xxxxxxxxxxxx"
+# dragonfly_url = "redis://node-xxxxxxxxxxxx:password@controlplane:6379"
+# name = "proxy-east-1"
+# heartbeat_interval_secs = 10
+# enrollment_token = "one-time-token-from-enrollment"
+# hmac_key = "base64url-hmac-key-from-enrollment"
