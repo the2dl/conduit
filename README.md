@@ -62,4 +62,4 @@ docker build --target api -t conduit-api .
 
 ## License
 
-Proprietary.
+Licensed under the [Apache License, Version 2.0](LICENSE).
