@@ -340,8 +340,8 @@ fn verify_heartbeat_signature(hb: &NodeHeartbeat, hmac_key_b64: &str) -> bool {
 
 fn generate_secret(len: usize) -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..len).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..len).map(|_| rng.random()).collect();
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &bytes)
 }
 
