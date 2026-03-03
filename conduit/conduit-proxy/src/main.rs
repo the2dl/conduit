@@ -11,6 +11,7 @@ mod policy;
 mod proxy;
 mod service;
 mod stats;
+mod threat;
 
 use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
@@ -83,8 +84,15 @@ fn main() -> anyhow::Result<()> {
     let mut server = Server::new(Some(opt))?;
     server.bootstrap();
 
-    // Spawn logging pipeline
-    let log_tx = logging::spawn_logging_pipeline(&config, &pool);
+    // Initialize threat engine if configured (before logging pipeline so it can receive the Arc)
+    let threat_engine = if config.threat.as_ref().map(|t| t.enabled).unwrap_or(false) {
+        Some(threat::initialize(&pool, config.threat.as_ref().unwrap()))
+    } else {
+        None
+    };
+
+    // Spawn logging pipeline (receives threat engine for reputation cache updates)
+    let log_tx = logging::spawn_logging_pipeline(&config, &pool, threat_engine.clone());
 
     // Spawn node lifecycle (heartbeat, pub/sub) if configured
     node::spawn_node_lifecycle(&config, &pool);
@@ -96,6 +104,7 @@ fn main() -> anyhow::Result<()> {
         ca.clone(),
         cert_cache.clone(),
         log_tx.clone(),
+        threat_engine.clone(),
     );
     let pingora_proxy = Arc::new(http_proxy(&server.configuration, proxy_inner));
 
@@ -107,6 +116,7 @@ fn main() -> anyhow::Result<()> {
         cert_cache,
         log_tx: LogSender(log_tx),
         http_proxy: pingora_proxy,
+        threat_engine,
     };
 
     let mut service =

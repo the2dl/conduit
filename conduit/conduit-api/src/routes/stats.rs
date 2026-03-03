@@ -24,6 +24,12 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
             let tls: u64 = conn.get(keys::STATS_TLS).await.unwrap_or(0);
             let active: u64 = conn.get(keys::STATS_ACTIVE).await.unwrap_or(0);
 
+            let threat_blocks: u64 = conn.get(keys::STATS_THREAT_BLOCKS).await.unwrap_or(0);
+            let threat_t0: u64 = conn.get(keys::STATS_THREAT_T0).await.unwrap_or(0);
+            let threat_t1: u64 = conn.get(keys::STATS_THREAT_T1).await.unwrap_or(0);
+            let threat_t2: u64 = conn.get(keys::STATS_THREAT_T2).await.unwrap_or(0);
+            let threat_t3: u64 = conn.get(keys::STATS_THREAT_T3).await.unwrap_or(0);
+
             let global = ProxyStats {
                 total_requests: total,
                 blocked_requests: blocked,
@@ -31,6 +37,11 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
                 tls_intercepted: tls,
                 cache_hits: 0,
                 cache_misses: 0,
+                threat_blocks,
+                threat_tier0_evals: threat_t0,
+                threat_tier1_escalations: threat_t1,
+                threat_tier2_escalations: threat_t2,
+                threat_tier3_escalations: threat_t3,
             };
 
             // Per-node breakdown

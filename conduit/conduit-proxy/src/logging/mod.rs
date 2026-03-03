@@ -2,12 +2,14 @@ pub mod dragonfly;
 pub mod syslog;
 
 use conduit_common::config::ClearGateConfig;
-use conduit_common::types::LogEntry;
+use conduit_common::types::{LogEntry, ThreatTier};
 use deadpool_redis::Pool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+use crate::threat::ThreatEngine;
 
 /// Global counter of dropped log entries.
 pub static DROPPED_LOGS: AtomicU64 = AtomicU64::new(0);
@@ -33,12 +35,23 @@ impl LogSender {
 pub fn spawn_logging_pipeline(
     config: &Arc<ClearGateConfig>,
     pool: &Arc<Pool>,
+    threat_engine: Option<Arc<ThreatEngine>>,
 ) -> mpsc::Sender<LogEntry> {
     let (tx, rx) = mpsc::channel::<LogEntry>(config.log_channel_size);
 
     let pool = pool.clone();
     let syslog_target = config.syslog_target.clone();
     let log_retention = config.log_retention;
+    let threat_reputation_enabled = config
+        .threat
+        .as_ref()
+        .map(|t| t.enabled && t.reputation_enabled)
+        .unwrap_or(false);
+    let threat_decay_hours = config
+        .threat
+        .as_ref()
+        .map(|t| t.reputation_decay_hours)
+        .unwrap_or(168);
 
     // Extract node identity from config
     let node_id = config.node.as_ref().map(|n| n.node_id.clone());
@@ -59,6 +72,9 @@ pub fn spawn_logging_pipeline(
                 log_retention,
                 node_id,
                 node_name,
+                threat_reputation_enabled,
+                threat_decay_hours,
+                threat_engine,
             ));
         })
         .expect("Failed to spawn logging thread");
@@ -73,6 +89,9 @@ async fn run_logging_pipeline(
     log_retention: usize,
     node_id: Option<String>,
     node_name: Option<String>,
+    threat_reputation_enabled: bool,
+    threat_decay_hours: u64,
+    threat_engine: Option<Arc<ThreatEngine>>,
 ) {
     info!("Logging pipeline started");
 
@@ -109,6 +128,27 @@ async fn run_logging_pipeline(
             entry.action == conduit_common::types::PolicyAction::Block,
             entry.tls_intercepted,
         );
+
+        // Track threat stats
+        if let Some(tier) = entry.threat_tier {
+            if tier != ThreatTier::None {
+                crate::stats::record_threat(
+                    entry.threat_blocked.unwrap_or(false),
+                    tier,
+                );
+            }
+        }
+
+        // Update threat reputation (async, off request path)
+        if threat_reputation_enabled
+            && (entry.threat_score.is_some() || entry.threat_tier.is_some())
+        {
+            let cache_ref = threat_engine.as_ref().map(|e| &e.reputation_cache);
+            crate::threat::reputation::update_from_log(
+                &pool, &entry, threat_decay_hours, cache_ref,
+            )
+            .await;
+        }
 
         // Stdout JSON (always)
         if let Ok(json) = serde_json::to_string(&entry) {

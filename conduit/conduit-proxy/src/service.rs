@@ -24,6 +24,7 @@ use crate::mitm::cert_cache::CertCache;
 use crate::mitm::tunnel;
 use crate::policy;
 use crate::proxy::ClearGateProxy;
+use crate::threat::ThreatEngine;
 
 /// Custom ServerApp that handles both plain HTTP proxying and CONNECT tunneling.
 ///
@@ -38,6 +39,7 @@ pub struct ClearGateService {
     pub log_tx: LogSender,
     /// Internal Pingora HTTP proxy for non-CONNECT requests.
     pub http_proxy: Arc<HttpProxy<ClearGateProxy>>,
+    pub threat_engine: Option<Arc<ThreatEngine>>,
 }
 
 #[async_trait]
@@ -126,6 +128,32 @@ impl ClearGateService {
 
         // Check policy before establishing tunnel
         let category = policy::categories::lookup_category(&self.pool, &host).await;
+
+        // Threat detection: heuristics (deterministic) + reputation check (learned)
+        let mut threat_blocked = false;
+        let mut threat_score = None;
+        let mut threat_tier = None;
+        if let Some(ref engine) = self.threat_engine {
+            // 1. Deterministic heuristic scoring
+            let verdict = crate::threat::evaluate_request(
+                engine, &host, port, "/", "https",
+                category.as_deref(), None,
+            );
+            threat_blocked = verdict.blocked;
+            threat_score = Some(verdict.score);
+            threat_tier = Some(verdict.tier_reached);
+
+            // 2. Reputation check — only at CONNECT boundary.
+            //    If Tier 2 content analysis previously flagged this domain, block it.
+            if !threat_blocked {
+                if let Some(rep_score) = crate::threat::check_reputation(engine, &host) {
+                    threat_blocked = true;
+                    threat_score = Some(rep_score);
+                    threat_tier = Some(conduit_common::types::ThreatTier::Tier2); // reputation originates from T2 content analysis
+                }
+            }
+        }
+
         let (action, _rule_id) = policy::rules::evaluate(
             &self.pool,
             &host,
@@ -136,7 +164,7 @@ impl ClearGateService {
         )
         .await;
 
-        if action == PolicyAction::Block {
+        if threat_blocked || action == PolicyAction::Block {
             info!(host = %host, category = ?category, "Blocking CONNECT");
 
             if self.config.tls_intercept {
@@ -193,6 +221,9 @@ impl ClearGateService {
                 content_type: None,
                 node_id: None,
                 node_name: None,
+                threat_score,
+                threat_tier,
+                threat_blocked: if threat_blocked { Some(true) } else { None },
             };
             self.log_tx.send(entry);
 
@@ -228,6 +259,9 @@ impl ClearGateService {
             category,
             username,
             auth_method,
+            threat_score,
+            threat_tier,
+            self.threat_engine.clone(),
         )
         .await;
 

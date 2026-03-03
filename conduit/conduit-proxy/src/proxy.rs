@@ -20,6 +20,7 @@ use crate::identity;
 use crate::logging::LogSender;
 use crate::mitm::cert_cache::CertCache;
 use crate::policy;
+use crate::threat::ThreatEngine;
 
 /// Core proxy struct implementing Pingora's ProxyHttp trait.
 pub struct ClearGateProxy {
@@ -30,6 +31,7 @@ pub struct ClearGateProxy {
     #[allow(dead_code)]
     pub cert_cache: Arc<CertCache>,
     pub log_tx: LogSender,
+    pub threat_engine: Option<Arc<ThreatEngine>>,
 }
 
 impl ClearGateProxy {
@@ -39,6 +41,7 @@ impl ClearGateProxy {
         ca: Arc<CertAuthority>,
         cert_cache: Arc<CertCache>,
         log_tx: mpsc::Sender<LogEntry>,
+        threat_engine: Option<Arc<ThreatEngine>>,
     ) -> Self {
         Self {
             config,
@@ -46,6 +49,7 @@ impl ClearGateProxy {
             ca,
             cert_cache,
             log_tx: LogSender(log_tx),
+            threat_engine,
         }
     }
 
@@ -225,6 +229,46 @@ impl ProxyHttp for ClearGateProxy {
         // Category lookup
         ctx.category = policy::categories::lookup_category(&self.pool, &ctx.host).await;
 
+        // Threat detection: deterministic heuristics + reputation check
+        if let Some(ref engine) = self.threat_engine {
+            let verdict = crate::threat::evaluate_request(
+                engine,
+                &ctx.host,
+                ctx.port,
+                &ctx.path,
+                &ctx.scheme,
+                ctx.category.as_deref(),
+                ctx.upstream_addr.as_deref(),
+            );
+
+            // Block if heuristics say block OR reputation (from prior Tier 2 findings) says block
+            let rep_block = crate::threat::check_reputation(engine, &ctx.host);
+            let should_block = verdict.blocked || rep_block.is_some();
+
+            if should_block {
+                let score = rep_block.unwrap_or(verdict.score);
+                ctx.action = PolicyAction::Block;
+                ctx.threat_verdict = Some(conduit_common::types::ThreatVerdict {
+                    score,
+                    blocked: true,
+                    ..verdict
+                });
+                debug!(host = %ctx.host, score, "Blocking request (threat detected)");
+                let body = self.build_block_page(&ctx.host, "threat-detected");
+                let mut resp = ResponseHeader::build(403, Some(3))?;
+                resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                resp.insert_header("Content-Length", &body.len().to_string())?;
+                resp.insert_header("Connection", "close")?;
+                session
+                    .write_response_header(Box::new(resp), false)
+                    .await?;
+                session.write_response_body(Some(body), true).await?;
+                ctx.response_status = 403;
+                return Ok(true);
+            }
+            ctx.threat_verdict = Some(verdict);
+        }
+
         // Policy evaluation
         let (action, rule_id) = policy::rules::evaluate(
             &self.pool,
@@ -318,7 +362,7 @@ impl ProxyHttp for ClearGateProxy {
         Ok(())
     }
 
-    /// Capture response status code.
+    /// Capture response status code and headers for Tier 2 content inspection.
     async fn response_filter(
         &self,
         _session: &mut Session,
@@ -326,20 +370,130 @@ impl ProxyHttp for ClearGateProxy {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         ctx.response_status = upstream_response.status.as_u16();
+
+        // Capture headers needed for Tier 2 content analysis
+        if let Some(ct) = upstream_response.headers.get("content-type") {
+            ctx.response_content_type = ct.to_str().ok().map(String::from);
+        }
+        if let Some(loc) = upstream_response.headers.get("location") {
+            ctx.response_location = loc.to_str().ok().map(String::from);
+        }
+
+        // Start buffering for Tier 2 content inspection when:
+        // 1. Tier 1 already escalated (T0 score was suspicious), OR
+        // 2. Response is HTML and the domain has any nonzero threat score
+        //    (catches phishing sites on clean-looking domains like auth.re)
+        if let Some(ref engine) = self.threat_engine {
+            if engine.config.tier2_enabled {
+                let t1_escalated = ctx.threat_verdict.as_ref()
+                    .map(|v| v.tier_reached >= conduit_common::types::ThreatTier::Tier1)
+                    .unwrap_or(false);
+
+                let ct = ctx.response_content_type.as_deref().unwrap_or("");
+                let is_inspectable = ct.contains("html") || ct.contains("javascript");
+
+                let has_any_threat_score = ctx.threat_verdict.as_ref()
+                    .map(|v| v.score > 0.05)
+                    .unwrap_or(false);
+
+                let uncategorized = ctx.category.is_none();
+
+                if t1_escalated || (is_inspectable && (has_any_threat_score || uncategorized)) {
+                    ctx.threat_inspect_buffer = Some(Vec::with_capacity(8192));
+                }
+            }
+        }
+
         Ok(())
     }
 
-    /// Track response body size.
+    /// Track response body size + buffer for Tier 2 content inspection.
     fn response_body_filter(
         &self,
         _session: &mut Session,
         body: &mut Option<Bytes>,
-        _end_of_stream: bool,
+        end_of_stream: bool,
         ctx: &mut Self::CTX,
     ) -> Result<Option<std::time::Duration>> {
         if let Some(b) = body {
             ctx.response_bytes += b.len() as u64;
+
+            // Tap response bytes into inspection buffer (up to max_inspect_bytes)
+            if let Some(ref mut buf) = ctx.threat_inspect_buffer {
+                let max = self
+                    .threat_engine
+                    .as_ref()
+                    .map(|e| e.config.max_inspect_bytes)
+                    .unwrap_or(0);
+                if buf.len() < max {
+                    let remaining = max - buf.len();
+                    buf.extend_from_slice(&b[..b.len().min(remaining)]);
+                }
+            }
         }
+
+        // At end of stream, run Tier 2 content analysis and update reputation
+        if end_of_stream {
+            if let Some(buf) = ctx.threat_inspect_buffer.take() {
+                if !buf.is_empty() {
+                    let (t2_score, t2_signals) = crate::threat::content::analyze_response(
+                        &buf,
+                        &ctx.host,
+                        ctx.response_content_type.as_deref(),
+                        ctx.response_status,
+                        ctx.response_location.as_deref(),
+                    );
+
+                    // Merge Tier 2 results into the verdict for logging
+                    if let Some(ref mut verdict) = ctx.threat_verdict {
+                        if t2_score > 0.0 {
+                            verdict.signals.extend(t2_signals);
+                            // Blend: keep higher of T1 score or T2-boosted score
+                            let blended = (verdict.score * 0.5 + t2_score * 0.5).min(1.0);
+                            if blended > verdict.score {
+                                verdict.score = blended;
+                            }
+                            verdict.tier_reached = conduit_common::types::ThreatTier::Tier2;
+
+                            if let Some(ref engine) = self.threat_engine {
+                                // Only write reputation when both heuristics AND content
+                                // are suspicious. Legitimate login pages (Reddit, Google)
+                                // match content patterns but have clean heuristic scores.
+                                let pre_t2 = verdict.score - (t2_score * 0.5);
+                                if t2_score >= 0.5 && pre_t2 >= 0.2 {
+                                    crate::threat::reputation::cache_score(
+                                        &engine.reputation_cache,
+                                        ctx.host.clone(),
+                                        1.0,
+                                    );
+                                }
+
+                                // Tier 3 escalation: send to LLM worker if score is ambiguous
+                                if let Some(ref llm_tx) = engine.llm_tx {
+                                    if engine.config.tier3_enabled
+                                        && verdict.score >= engine.config.tier2_escalation_threshold
+                                        && verdict.score < engine.config.tier0_block_threshold
+                                    {
+                                        let llm_req = crate::threat::llm::LlmRequest {
+                                            host: ctx.host.clone(),
+                                            signals: verdict.signals.clone(),
+                                            tier0_score: verdict.score,
+                                            tier1_score: Some(verdict.score),
+                                            tier2_score: Some(t2_score),
+                                            reputation_score: verdict.reputation_score.unwrap_or(0.5),
+                                            reply_tx: None,
+                                        };
+                                        let _ = llm_tx.try_send(llm_req);
+                                        verdict.tier_reached = conduit_common::types::ThreatTier::Tier3;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(None)
     }
 
@@ -375,6 +529,9 @@ impl ProxyHttp for ClearGateProxy {
             content_type: None,
             node_id: None,
             node_name: None,
+            threat_score: ctx.threat_verdict.as_ref().map(|v| v.score),
+            threat_tier: ctx.threat_verdict.as_ref().map(|v| v.tier_reached),
+            threat_blocked: ctx.threat_verdict.as_ref().map(|v| v.blocked),
         };
 
         self.log_tx.send(entry);

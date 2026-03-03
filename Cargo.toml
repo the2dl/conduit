@@ -77,6 +77,11 @@ tar = "0.4"
 bcrypt = "0.18"
 governor = "0.10"
 nonzero_lit = "0.1"
+bloomfilter = "1"
+ipnet = "2"
+regex = "1"
+unicode-normalization = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3

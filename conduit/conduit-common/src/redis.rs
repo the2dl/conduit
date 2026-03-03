@@ -95,4 +95,38 @@ pub mod keys {
         let safe_stat = sanitize_key_component(stat);
         format!("cleargate:stats:{safe_id}:{safe_stat}")
     }
+
+    // --- Threat detection keys ---
+
+    /// Serialized bloom filter bitmap
+    pub const THREAT_BLOOM: &str = "cleargate:threat:bloom";
+    /// Bloom filter metadata (entry_count, updated_at)
+    pub const THREAT_BLOOM_META: &str = "cleargate:threat:bloom:meta";
+    /// Set of all tracked reputation domains
+    pub const THREAT_REPUTATION_INDEX: &str = "cleargate:threat:reputation:index";
+    /// Hash of all configured threat feeds
+    pub const THREAT_FEEDS: &str = "cleargate:threat:feeds";
+    /// Set of known-bad CIDRs
+    pub const THREAT_BAD_CIDRS: &str = "cleargate:threat:bad_cidrs";
+    /// Pub/sub channel for bloom/feed reload notifications
+    pub const THREAT_RELOAD_CHANNEL: &str = "cleargate:threat:reload";
+
+    /// Threat-specific stat counters
+    pub const STATS_THREAT_BLOCKS: &str = "cleargate:stats:threat_blocks";
+    pub const STATS_THREAT_T0: &str = "cleargate:stats:threat_t0";
+    pub const STATS_THREAT_T1: &str = "cleargate:stats:threat_t1";
+    pub const STATS_THREAT_T2: &str = "cleargate:stats:threat_t2";
+    pub const STATS_THREAT_T3: &str = "cleargate:stats:threat_t3";
+
+    /// Per-domain reputation hash: cleargate:threat:reputation:{domain}
+    pub fn threat_reputation(domain: &str) -> String {
+        let safe = sanitize_key_component(domain);
+        format!("cleargate:threat:reputation:{safe}")
+    }
+
+    /// Per-feed config/state: cleargate:threat:feed:{feed_id}
+    pub fn threat_feed(feed_id: &str) -> String {
+        let safe = sanitize_key_component(feed_id);
+        format!("cleargate:threat:feed:{safe}")
+    }
 }

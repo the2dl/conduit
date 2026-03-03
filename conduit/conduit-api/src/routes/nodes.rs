@@ -135,17 +135,12 @@ async fn create_node(
         // Auth lookups
         .arg("~cleargate:users:*")
         .arg("~cleargate:ip_map")
-        // Scoped command categories — only what nodes need
-        .arg("+@read")
-        .arg("+@write")
-        .arg("+@set")
-        .arg("+@sortedset")
-        .arg("+@hash")
-        .arg("+@string")
-        .arg("+@stream")
-        .arg("+@pubsub")
-        .arg("+@connection")
-        .arg("+@server")
+        // Threat detection (reputation, bloom, feeds, stats, reload channel)
+        .arg("~cleargate:threat:*")
+        // Allow all commands, then deny dangerous ones.
+        // Dragonfly doesn't support fine-grained +@category ACLs like Redis 7,
+        // so we use +@all -@admin -@dangerous which works on both.
+        .arg("+@all")
         .arg("-@admin")
         .arg("-@dangerous")
         .query_async(&mut *conn)

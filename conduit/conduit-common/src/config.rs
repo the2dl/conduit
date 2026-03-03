@@ -47,6 +47,9 @@ pub struct ClearGateConfig {
     /// Multi-node configuration. When present, this proxy acts as a managed node.
     #[serde(default)]
     pub node: Option<NodeConfig>,
+    /// Real-time threat detection configuration.
+    #[serde(default)]
+    pub threat: Option<ThreatConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +68,81 @@ pub struct NodeConfig {
     #[serde(default)]
     pub hmac_key: Option<String>,
 }
+
+/// Real-time threat detection pipeline configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    // Tier 0: heuristics
+    #[serde(default = "default_t0_escalate")]
+    pub tier0_escalation_threshold: f32,
+    #[serde(default = "default_t0_block")]
+    pub tier0_block_threshold: f32,
+    #[serde(default = "default_dga_entropy")]
+    pub dga_entropy_threshold: f32,
+    #[serde(default = "default_true")]
+    pub homoglyph_detection: bool,
+    #[serde(default = "default_homoglyph_n")]
+    pub homoglyph_top_n: usize,
+
+    // Tier 1: ML model
+    #[serde(default = "default_true")]
+    pub tier1_enabled: bool,
+    #[serde(default = "default_t1_escalate")]
+    pub tier1_escalation_threshold: f32, // reserved for future per-tier threshold tuning
+
+    // Tier 2: content inspection
+    #[serde(default = "default_true")]
+    pub tier2_enabled: bool,
+    #[serde(default = "default_t2_escalate")]
+    pub tier2_escalation_threshold: f32,
+    #[serde(default = "default_max_inspect")]
+    pub max_inspect_bytes: usize,
+
+    // Tier 3: LLM verdict
+    #[serde(default)]
+    pub tier3_enabled: bool,
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    #[serde(default)]
+    pub llm_api_url: Option<String>,
+    #[serde(default)]
+    pub llm_api_key: Option<String>,
+    #[serde(default = "default_t3_behavior")]
+    pub tier3_behavior: String,
+    #[serde(default = "default_t3_timeout")]
+    pub tier3_timeout_ms: u64,
+
+    // Reputation
+    #[serde(default = "default_true")]
+    pub reputation_enabled: bool,
+    #[serde(default = "default_decay_hours")]
+    pub reputation_decay_hours: u64,
+
+    // Bloom filter / feeds
+    #[serde(default = "default_bloom_cap")]
+    pub bloom_capacity: usize,
+    #[serde(default = "default_bloom_fp")]
+    pub bloom_fp_rate: f64,
+    #[serde(default = "default_feed_refresh")]
+    pub feed_refresh_interval_secs: u64,
+}
+
+fn default_t0_escalate() -> f32 { 0.3 }
+fn default_t0_block() -> f32 { 0.9 }
+fn default_dga_entropy() -> f32 { 3.5 }
+fn default_homoglyph_n() -> usize { 1000 }
+fn default_t1_escalate() -> f32 { 0.5 }
+fn default_t2_escalate() -> f32 { 0.6 }
+fn default_max_inspect() -> usize { 262144 }
+fn default_t3_behavior() -> String { "allow_and_flag".into() }
+fn default_t3_timeout() -> u64 { 5000 }
+fn default_decay_hours() -> u64 { 168 }
+fn default_bloom_cap() -> usize { 2_000_000 }
+fn default_bloom_fp() -> f64 { 0.001 }
+fn default_feed_refresh() -> u64 { 3600 }
 
 fn default_heartbeat_interval() -> u64 {
     10
@@ -125,6 +203,7 @@ impl Default for ClearGateConfig {
             api_key: None,
             fail_closed: true,
             node: None,
+            threat: None,
         }
     }
 }

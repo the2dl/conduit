@@ -32,6 +32,15 @@ pub struct LogEntry {
     /// Human-readable node name (multi-node deployments).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_name: Option<String>,
+    /// Threat detection score (0.0 = safe, 1.0 = malicious).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threat_score: Option<f32>,
+    /// Highest threat tier reached during evaluation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threat_tier: Option<ThreatTier>,
+    /// Whether the request was blocked by threat detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threat_blocked: Option<bool>,
 }
 
 /// How the user was identified.
@@ -64,6 +73,82 @@ impl Default for PolicyAction {
     fn default() -> Self {
         Self::Allow
     }
+}
+
+// ---------------------------------------------------------------------------
+// Threat detection types
+// ---------------------------------------------------------------------------
+
+/// Threat evaluation tier reached during request processing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreatTier {
+    None,
+    Tier0,
+    Tier1,
+    Tier2,
+    Tier3,
+}
+
+impl Default for ThreatTier {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// A single signal from the threat detection pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatSignal {
+    pub name: String,
+    pub score: f32,
+    pub tier: ThreatTier,
+}
+
+/// Combined verdict from the threat detection pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ThreatVerdict {
+    pub score: f32,
+    pub tier_reached: ThreatTier,
+    pub blocked: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub signals: Vec<ThreatSignal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reputation_score: Option<f32>,
+}
+
+/// A configured threat intelligence feed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatFeed {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub feed_type: ThreatFeedType,
+    pub enabled: bool,
+    pub refresh_interval_secs: u64,
+    pub last_updated: Option<DateTime<Utc>>,
+    pub entry_count: u64,
+}
+
+/// Type of threat intelligence feed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreatFeedType {
+    DomainBlocklist,
+    IpBlocklist,
+    UrlBlocklist,
+}
+
+/// Per-domain reputation record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainReputation {
+    pub domain: String,
+    pub score: f32,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub request_count: u64,
+    pub unique_users: u32,
+    pub threat_signals_total: u32,
+    pub last_threat_score: f32,
 }
 
 /// A single policy rule.
@@ -100,6 +185,16 @@ pub struct ProxyStats {
     pub tls_intercepted: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
+    #[serde(default)]
+    pub threat_blocks: u64,
+    #[serde(default)]
+    pub threat_tier0_evals: u64,
+    #[serde(default)]
+    pub threat_tier1_escalations: u64,
+    #[serde(default)]
+    pub threat_tier2_escalations: u64,
+    #[serde(default)]
+    pub threat_tier3_escalations: u64,
 }
 
 // ---------------------------------------------------------------------------

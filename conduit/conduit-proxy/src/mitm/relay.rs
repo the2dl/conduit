@@ -7,16 +7,136 @@
 
 use conduit_common::types::{AuthMethod, LogEntry, PolicyAction};
 use std::io;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::debug;
 
 use crate::logging::LogSender;
+use crate::threat::ThreatEngine;
 
 /// Maximum header block size (request line + headers) before rejecting.
 const MAX_HEADER_SIZE: usize = 65536;
 
 /// Maximum chunk size for chunked transfer encoding (256 MB).
 const MAX_CHUNK_SIZE: u64 = 256 * 1024 * 1024;
+
+/// Per-tunnel accumulated pattern tracker.
+/// Evaluates the sequence of requests holistically to detect phishing sessions
+/// that individual request analysis would miss.
+struct TunnelPatterns {
+    has_login_path: bool,
+    has_credential_path: bool,
+    has_brand_images: bool,
+    has_brand_in_subdomain: bool,
+    is_free_hosting: bool,
+    request_count: u32,
+    t2_fired: bool,
+}
+
+/// Free hosting platforms — same list as heuristics.rs
+/// Reuse the free hosting list from heuristics module.
+fn is_free_hosting_domain(host: &str) -> bool {
+    crate::threat::heuristics::is_free_hosting(host)
+}
+
+/// Brand words that suggest impersonation when found in subdomain + login context.
+const BRAND_WORDS: &[&str] = &[
+    "netflix", "google", "apple", "microsoft", "amazon", "paypal", "facebook",
+    "instagram", "chase", "wellsfargo", "bankofamerica", "robinhood", "coinbase",
+    "dropbox", "adobe", "docusign", "outlook", "office365", "linkedin", "twitter",
+    "yahoo", "icloud", "usps", "fedex", "dhl", "ups", "costco", "walmart",
+    "target", "bestbuy", "ebay", "venmo", "zelle", "stripe", "shopify",
+];
+
+impl TunnelPatterns {
+    fn new(host: &str) -> Self {
+        let host_lower = host.to_ascii_lowercase();
+
+        // Check if hosted on a free platform
+        let is_free_hosting = is_free_hosting_domain(host);
+
+        // Check if subdomain contains a brand word
+        let subdomain = host_lower.split('.').next().unwrap_or("");
+        let has_brand = BRAND_WORDS.iter().any(|b| subdomain.contains(b));
+
+        Self {
+            has_login_path: false,
+            has_credential_path: false,
+            has_brand_images: false,
+            has_brand_in_subdomain: has_brand,
+            is_free_hosting,
+            request_count: 0,
+            t2_fired: false,
+        }
+    }
+
+    fn observe_request(&mut self, path: &str, content_type: Option<&str>) {
+        self.request_count = self.request_count.saturating_add(1);
+        let path_lower = path.to_ascii_lowercase();
+
+        // Login/credential paths
+        if path_lower.contains("login") || path_lower.contains("signin")
+            || path_lower.contains("sign-in") || path_lower.contains("logon")
+        {
+            self.has_login_path = true;
+        }
+        if path_lower.contains("account") || path_lower.contains("verify")
+            || path_lower.contains("auth") || path_lower.contains("password")
+            || path_lower.contains("credential") || path_lower.contains("secure")
+        {
+            self.has_credential_path = true;
+        }
+
+        // Brand-suggesting image filenames
+        let is_image = content_type.map(|ct| ct.contains("image")).unwrap_or(false)
+            || path_lower.ends_with(".png") || path_lower.ends_with(".jpg")
+            || path_lower.ends_with(".svg") || path_lower.ends_with(".ico");
+        if is_image {
+            let filename = path_lower.rsplit('/').next().unwrap_or("");
+            if BRAND_WORDS.iter().any(|b| filename.contains(b))
+                || filename.contains("logo")
+            {
+                self.has_brand_images = true;
+            }
+        }
+    }
+
+    /// Evaluate the accumulated tunnel pattern. Returns a score if the pattern
+    /// looks like a phishing session, or None if inconclusive.
+    fn evaluate(&self) -> Option<f32> {
+        // Need at least a few requests to form a pattern
+        if self.request_count < 2 {
+            return None;
+        }
+
+        let mut score = 0.0f32;
+        let mut signals = 0u32;
+
+        if self.is_free_hosting {
+            score += 0.15;
+            signals += 1;
+        }
+        if self.has_login_path || self.has_credential_path {
+            score += 0.25;
+            signals += 1;
+        }
+        if self.has_brand_in_subdomain {
+            score += 0.25;
+            signals += 1;
+        }
+        if self.has_brand_images {
+            score += 0.15;
+            signals += 1;
+        }
+
+        // Need at least 2 corroborating signals
+        if signals >= 2 {
+            Some(score.min(1.0))
+        } else {
+            None
+        }
+    }
+}
 
 /// Parsed HTTP request line + headers.
 struct ParsedRequest {
@@ -57,6 +177,7 @@ pub async fn relay_loop<C, U>(
     category: Option<&str>,
     username: Option<&str>,
     auth_method: Option<AuthMethod>,
+    threat_engine: Option<Arc<ThreatEngine>>,
 ) -> (u64, u64)
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -66,6 +187,7 @@ where
     let mut upstream = upstream;
     let mut total_up: u64 = 0;
     let mut total_down: u64 = 0;
+    let mut tunnel_patterns = TunnelPatterns::new(host);
 
     loop {
         let start = chrono::Utc::now();
@@ -91,7 +213,7 @@ where
         total_up += req.raw_head.len() as u64;
 
         // --- Forward request body ---
-        let req_body_bytes = match forward_body(&mut client_r, &mut upstream, &req.content_length, req.is_chunked).await {
+        let req_body_bytes = match forward_body(&mut client_r, &mut upstream, &req.content_length, req.is_chunked, None, 0, None, 0).await {
             Ok(n) => n,
             Err(_) => break,
         };
@@ -114,6 +236,9 @@ where
         let content_type = resp.content_type.clone();
         let connection_close = resp.connection_close;
 
+        // Track tunnel-level patterns for holistic phishing detection
+        tunnel_patterns.observe_request(&path, content_type.as_deref());
+
         // --- Forward response head to client ---
         // Get the inner writer back from BufReader for the client write
         let client_w = client_r.get_mut();
@@ -122,8 +247,35 @@ where
         }
         total_down += resp.raw_head.len() as u64;
 
-        // --- Forward response body ---
-        let resp_body_bytes = match forward_body(&mut upstream_buf, client_w, &resp.content_length, resp.is_chunked).await {
+        // --- Forward response body (with optional content inspection tap) ---
+        // Inspect HTML and JavaScript responses — JS bundles from client-side
+        // rendered apps contain the phishing strings (brand names, "Sign In",
+        // form fields) even when the initial HTML is an empty shell.
+        let should_inspect = threat_engine.as_ref().map_or(false, |engine| {
+            if !engine.config.tier2_enabled {
+                return false;
+            }
+            let ct = content_type.as_deref().unwrap_or("");
+            ct.contains("html") || ct.contains("javascript")
+        });
+
+        // For content inspection, buffer the entire response body (up to 1MB).
+        // This handles gzip-compressed pages where the phishing content is deep
+        // in the body — we need the complete compressed stream to decompress.
+        let max_inspect: usize = if should_inspect { 1_048_576 } else { 0 }; // 1MB
+
+        let mut inspect_buf = if should_inspect {
+            Some(Vec::with_capacity(8192))
+        } else {
+            None
+        };
+
+        let resp_body_bytes = match forward_body(
+            &mut upstream_buf, client_w,
+            &resp.content_length, resp.is_chunked,
+            inspect_buf.as_mut(), max_inspect,
+            None, 0, // no tail buffer needed — we capture enough in head
+        ).await {
             Ok(n) => n,
             Err(_) => break,
         };
@@ -134,6 +286,54 @@ where
 
         // Recover upstream from BufReader for next iteration
         upstream = upstream_buf.into_inner();
+
+        // --- Threat detection on inner request ---
+        // Deterministic heuristic scoring — no reputation feedback.
+        let (mut t_score, mut t_tier, t_blocked) = if let Some(ref engine) = threat_engine {
+            let verdict = crate::threat::evaluate_request(
+                engine, &req_host, port, &path, "https",
+                category, Some(upstream_addr),
+            );
+            (Some(verdict.score), Some(verdict.tier_reached), Some(verdict.blocked))
+        } else {
+            (None, None, None)
+        };
+
+        // --- Tier 2 content inspection ---
+        let mut t2_score = 0.0f32;
+        if let Some(buf) = inspect_buf {
+            if !buf.is_empty() {
+                let (score, _signals) = crate::threat::content::analyze_response(
+                    &buf, &req_host, content_type.as_deref(), status_code, None,
+                );
+                t2_score = score;
+            }
+        }
+        // Pre-T2 heuristic score — how suspicious is the domain structurally?
+        let pre_t2_score = t_score.unwrap_or(0.0);
+        let heuristics_suspicious = pre_t2_score >= 0.2;
+
+        // Apply Tier 2 results
+        if t2_score > 0.0 {
+            let blended = (pre_t2_score * 0.5 + t2_score * 0.5).max(pre_t2_score);
+            t_score = Some(blended);
+            t_tier = Some(conduit_common::types::ThreatTier::Tier2);
+
+            // Write reputation only when BOTH heuristics AND content are suspicious.
+            // If heuristics say the domain is clean (< 0.2) but content found
+            // "sign in" patterns, it's a legitimate login page (Reddit, Google).
+            // If heuristics flagged the domain (>= 0.2) AND content confirms
+            // phishing (>= 0.5), it's real phishing.
+            if t2_score >= 0.5 && heuristics_suspicious {
+                if let Some(ref engine) = threat_engine {
+                    crate::threat::reputation::cache_score(
+                        &engine.reputation_cache,
+                        host.to_string(),
+                        1.0,
+                    );
+                }
+            }
+        }
 
         // --- Log this request ---
         let full_url = format!("https://{req_host}{path}");
@@ -161,8 +361,44 @@ where
             content_type,
             node_id: None,
             node_name: None,
+            threat_score: t_score,
+            threat_tier: t_tier,
+            threat_blocked: t_blocked,
         };
         log_tx.send(entry);
+
+        // Evaluate accumulated tunnel patterns (phishing session detection)
+        let tunnel_suspicious = if !tunnel_patterns.t2_fired {
+            if let Some(pattern_score) = tunnel_patterns.evaluate() {
+                // Tunnel pattern detected — write reputation and mark for kill
+                if let Some(ref engine) = threat_engine {
+                    crate::threat::reputation::cache_score(
+                        &engine.reputation_cache,
+                        host.to_string(),
+                        1.0,
+                    );
+                }
+                tunnel_patterns.t2_fired = true; // only fire once per tunnel
+                debug!(host, pattern_score, "Tunnel pattern: phishing session detected");
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Kill tunnel if:
+        // 1. Heuristics say block (score >= threshold), OR
+        // 2. Tier 2 content analysis is confident (score >= 0.5 = 2+ matches), OR
+        // 3. Tunnel pattern analysis detected a phishing session
+        let t2_confident = t_tier == Some(conduit_common::types::ThreatTier::Tier2)
+            && t2_score >= 0.5
+            && heuristics_suspicious;
+        if t_blocked == Some(true) || t2_confident || tunnel_suspicious {
+            debug!(host, score = ?t_score, tier = ?t_tier, tunnel_suspicious, "Terminating tunnel — threat detected");
+            break;
+        }
 
         if connection_close {
             break;
@@ -316,29 +552,42 @@ async fn read_response<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> io::Result
 }
 
 /// Forward a message body from reader to writer, based on Content-Length or chunked encoding.
+/// Optionally taps the first `max_inspect` bytes into `inspect_buf` for content analysis.
+/// Optionally keeps a rolling `tail_buf` of the last `tail_max` bytes.
 /// Returns the number of body bytes forwarded.
 async fn forward_body<R, W>(
     reader: &mut R,
     writer: &mut W,
     content_length: &Option<u64>,
     is_chunked: bool,
+    inspect_buf: Option<&mut Vec<u8>>,
+    max_inspect: usize,
+    tail_buf: Option<&mut Vec<u8>>,
+    tail_max: usize,
 ) -> io::Result<u64>
 where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWrite + Unpin,
 {
     if is_chunked {
-        forward_chunked(reader, writer).await
+        forward_chunked(reader, writer, inspect_buf, max_inspect, tail_buf, tail_max).await
     } else if let Some(len) = content_length {
-        forward_fixed(reader, writer, *len).await
+        forward_fixed(reader, writer, *len, inspect_buf, max_inspect, tail_buf, tail_max).await
     } else {
-        // No body (GET, HEAD, etc.)
         Ok(0)
     }
 }
 
-/// Forward a fixed-length body.
-async fn forward_fixed<R, W>(reader: &mut R, writer: &mut W, length: u64) -> io::Result<u64>
+/// Forward a fixed-length body, optionally tapping into head + tail buffers.
+async fn forward_fixed<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    length: u64,
+    mut inspect_buf: Option<&mut Vec<u8>>,
+    max_inspect: usize,
+    mut tail_buf: Option<&mut Vec<u8>>,
+    tail_max: usize,
+) -> io::Result<u64>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -352,13 +601,36 @@ where
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "body truncated"));
         }
         writer.write_all(&buf[..n]).await?;
+        // Head buffer: first max_inspect bytes
+        if let Some(ref mut ib) = inspect_buf {
+            if ib.len() < max_inspect {
+                let space = max_inspect - ib.len();
+                ib.extend_from_slice(&buf[..n.min(space)]);
+            }
+        }
+        // Tail buffer: rolling window of last tail_max bytes
+        if let Some(ref mut tb) = tail_buf {
+            tb.extend_from_slice(&buf[..n]);
+            if tb.len() > tail_max {
+                let excess = tb.len() - tail_max;
+                tb.drain(..excess);
+            }
+        }
         remaining -= n as u64;
     }
     Ok(length)
 }
 
 /// Forward a chunked transfer-encoded body, including chunk framing.
-async fn forward_chunked<R, W>(reader: &mut R, writer: &mut W) -> io::Result<u64>
+/// Optionally taps chunk data (not framing) into head + tail buffers.
+async fn forward_chunked<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    mut inspect_buf: Option<&mut Vec<u8>>,
+    max_inspect: usize,
+    mut tail_buf: Option<&mut Vec<u8>>,
+    tail_max: usize,
+) -> io::Result<u64>
 where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWrite + Unpin,
@@ -404,6 +676,21 @@ where
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "chunk data truncated"));
             }
             writer.write_all(&buf[..n]).await?;
+            // Head buffer
+            if let Some(ref mut ib) = inspect_buf {
+                if ib.len() < max_inspect {
+                    let space = max_inspect - ib.len();
+                    ib.extend_from_slice(&buf[..n.min(space)]);
+                }
+            }
+            // Tail buffer (rolling)
+            if let Some(ref mut tb) = tail_buf {
+                tb.extend_from_slice(&buf[..n]);
+                if tb.len() > tail_max {
+                    let excess = tb.len() - tail_max;
+                    tb.drain(..excess);
+                }
+            }
             remaining -= n as u64;
             total += n as u64;
         }

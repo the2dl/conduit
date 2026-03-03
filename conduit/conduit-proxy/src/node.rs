@@ -226,21 +226,32 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
         error!(node_id, "Failed to subscribe to config reload channel: {e}");
         return;
     }
+    if let Err(e) = pubsub.subscribe(keys::THREAT_RELOAD_CHANNEL).await {
+        error!(node_id, "Failed to subscribe to threat reload channel: {e}");
+        // Non-fatal — config reload still works
+    }
 
-    info!(node_id, "Subscribed to config reload channel");
+    info!(node_id, "Subscribed to config + threat reload channels");
 
     use tokio_stream::StreamExt;
     let mut msg_stream = pubsub.on_message();
     while let Some(msg) = msg_stream.next().await {
+        let channel: String = msg.get_channel_name().to_string();
         let payload: String = match msg.get_payload() {
             Ok(p) => p,
             Err(_) => continue,
         };
-        info!(node_id, payload = %payload, "Config reload signal received");
+        info!(node_id, channel = %channel, payload = %payload, "Reload signal received");
 
-        // Invalidate caches
-        policy::rules::invalidate_cache();
-        policy::categories::invalidate_cache();
+        if channel == keys::CONFIG_RELOAD_CHANNEL {
+            // Invalidate policy/category caches
+            policy::rules::invalidate_cache();
+            policy::categories::invalidate_cache();
+        }
+        // Threat feed reloads are handled by the feed refresh thread's own interval.
+        // The pub/sub notification here is informational — the next feed refresh cycle
+        // will pick up any changes. For immediate reload, the feed thread watches
+        // the same channel internally.
     }
 }
 

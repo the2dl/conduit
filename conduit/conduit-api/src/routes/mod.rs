@@ -7,6 +7,7 @@ pub mod logs;
 pub mod nodes;
 pub mod policies;
 pub mod stats;
+pub mod threat;
 
 use crate::AppState;
 use axum::extract::{ConnectInfo, Request, State};
@@ -156,6 +157,7 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .merge(config::routes())
         .merge(import_ut1::routes())
         .merge(nodes::routes())
+        .merge(threat::routes())
         .route_layer(middleware::from_fn(audit_log))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_auth));
 

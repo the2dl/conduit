@@ -44,6 +44,9 @@ pub async fn handle_connect_tunnel(
     category: Option<String>,
     username: Option<String>,
     auth_method: Option<AuthMethod>,
+    threat_score: Option<f32>,
+    threat_tier: Option<conduit_common::types::ThreatTier>,
+    threat_engine: Option<Arc<crate::threat::ThreatEngine>>,
 ) {
     let addr = format!("{host}:{port}");
     let start = chrono::Utc::now();
@@ -90,9 +93,9 @@ pub async fn handle_connect_tunnel(
         };
 
     if config.tls_intercept {
-        handle_mitm(downstream, upstream_tcp, host, port, ca, cert_cache, &upstream_ip, &log_tx, &client_ip, category, username.as_deref(), auth_method).await;
+        handle_mitm(downstream, upstream_tcp, host, port, ca, cert_cache, &upstream_ip, &log_tx, &client_ip, category, username.as_deref(), auth_method, threat_engine).await;
     } else {
-        handle_passthrough(downstream, upstream_tcp, host, port, &upstream_ip, start, &log_tx, &client_ip, category, username.as_deref(), auth_method).await;
+        handle_passthrough(downstream, upstream_tcp, host, port, &upstream_ip, start, &log_tx, &client_ip, category, username.as_deref(), auth_method, threat_score, threat_tier).await;
     }
 }
 
@@ -238,6 +241,7 @@ async fn handle_mitm(
     category: Option<String>,
     username: Option<&str>,
     auth_method: Option<AuthMethod>,
+    threat_engine: Option<Arc<crate::threat::ThreatEngine>>,
 ) {
     // --- TLS accept on downstream (MITM) ---
     let downstream_tls = match mitm_accept(downstream, &host, &ca, &cert_cache).await {
@@ -309,6 +313,7 @@ async fn handle_mitm(
         category.as_deref(),
         username,
         auth_method,
+        threat_engine,
     )
     .await;
 
@@ -328,6 +333,8 @@ async fn handle_passthrough(
     category: Option<String>,
     username: Option<&str>,
     auth_method: Option<AuthMethod>,
+    threat_score: Option<f32>,
+    threat_tier: Option<conduit_common::types::ThreatTier>,
 ) {
     debug!(host = %host, port, upstream_ip = %upstream_ip, "Passthrough tunnel established");
 
@@ -359,6 +366,9 @@ async fn handle_passthrough(
                 content_type: None,
                 node_id: None,
                 node_name: None,
+                threat_score,
+                threat_tier,
+                threat_blocked: Some(false),
             };
             log_tx.send(entry);
         }

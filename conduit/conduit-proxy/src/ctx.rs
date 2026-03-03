@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use conduit_common::types::{PolicyAction, UserIdentity};
+use conduit_common::types::{PolicyAction, ThreatVerdict, UserIdentity};
 
 /// Per-request context carried through the Pingora filter chain.
 pub struct RequestContext {
@@ -19,6 +19,14 @@ pub struct RequestContext {
     pub request_bytes: u64,
     pub response_bytes: u64,
     pub upstream_addr: Option<String>,
+    pub threat_verdict: Option<ThreatVerdict>,
+    /// Buffer for Tier 2 content inspection (first N bytes of response body).
+    /// Only populated when Tier 1 escalated.
+    pub threat_inspect_buffer: Option<Vec<u8>>,
+    /// Response content-type (captured in response_filter for Tier 2).
+    pub response_content_type: Option<String>,
+    /// Response Location header (captured for redirect chain analysis).
+    pub response_location: Option<String>,
 }
 
 impl RequestContext {
@@ -40,12 +48,16 @@ impl RequestContext {
             request_bytes: 0,
             response_bytes: 0,
             upstream_addr: None,
+            threat_verdict: None,
+            threat_inspect_buffer: None,
+            response_content_type: None,
+            response_location: None,
         }
     }
 
     pub fn full_url(&self) -> String {
-        if self.port == 80 && self.scheme == "http"
-            || self.port == 443 && self.scheme == "https"
+        if (self.port == 80 && self.scheme == "http")
+            || (self.port == 443 && self.scheme == "https")
         {
             format!("{}://{}{}", self.scheme, self.host, self.path)
         } else {

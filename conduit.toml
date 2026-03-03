@@ -71,3 +71,47 @@ fail_closed = true
 # heartbeat_interval_secs = 10
 # enrollment_token = "one-time-token-from-enrollment"
 # hmac_key = "base64url-hmac-key-from-enrollment"
+
+# --- Threat Detection ---
+[threat]
+enabled = true
+
+# Tier 0: heuristics (runs on every request, <5us)
+tier0_escalation_threshold = 0.3   # Score above this -> escalate to Tier 1
+tier0_block_threshold = 0.9        # Score above this -> block immediately
+dga_entropy_threshold = 3.5        # Shannon entropy threshold for DGA detection
+homoglyph_detection = true         # Detect typosquatting (g00gle.com, paypai.com)
+homoglyph_top_n = 1000
+
+# Tier 1: ML decision tree (runs on ~2-5% of requests that T0 flags)
+tier1_enabled = true
+tier1_escalation_threshold = 0.5
+
+# Tier 2: content inspection (runs on ~0.5% -- responses from T1-escalated requests)
+tier2_enabled = true
+tier2_escalation_threshold = 0.6
+max_inspect_bytes = 262144         # 256KB of response body inspected
+
+# Tier 3: LLM verdict -- OFF for now
+tier3_enabled = false
+# llm_provider = "api"
+# llm_api_url = "https://api.anthropic.com/v1/messages"
+# llm_api_key = "sk-..."
+# tier3_behavior = "allow_and_flag"  # or "block_and_wait"
+# tier3_timeout_ms = 5000
+
+# Reputation: learns per-domain trust over time
+reputation_enabled = true
+reputation_decay_hours = 168       # 1 week half-life
+
+# Bloom filter for threat feeds
+bloom_capacity = 2000000
+bloom_fp_rate = 0.0001
+feed_refresh_interval_secs = 3600  # Re-fetch feeds every hour
+
+[node]
+node_id = "node-122cad33-87b"
+dragonfly_url = "redis://node-122cad33-87b:LeXPLRdRVIYrn9XGMWVGBWmi0D0oEijz-Qc2a9DkLfw@127.0.0.1:6379"
+name = "node-122cad33-87b"
+enrollment_token = "PF8Pl2237Qhx3pt78Xp6QT4YBDNQxls8aRswMwSKA-w"
+hmac_key = "1tW43N9gEx7z-JV-gXErPqcWIHGwdk87uz_JBeMeQEI"
