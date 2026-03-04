@@ -97,25 +97,31 @@ pub fn cache_score(
 /// Update reputation from a log entry, writing to both Redis and the in-process LRU cache.
 /// Called from the logging pipeline (async, off the request path).
 ///
-/// ONLY updates reputation from Tier 2+ content analysis signals.
-/// Tier 0/Tier 1 scores are ignored — they come from heuristics which are deterministic
-/// and don't represent learned information about the domain's actual content.
+/// Updates reputation when:
+/// 1. The request was blocked at Tier 1+ (not Tier 0 alone, to avoid heuristic false positives).
+/// 2. Tier 2+ content analysis found threats with score >= 0.5.
+///
+/// Tier 0 heuristic blocks are excluded because they are deterministic and can false-positive
+/// on high-entropy but legitimate domains. Letting those poison reputation for days (via the
+/// decay window) would cause persistent false blocks.
 pub async fn update_from_log(
     pool: &Pool,
     entry: &LogEntry,
     decay_hours: u64,
     cache: Option<&Mutex<LruCache<String, CachedReputation>>>,
 ) {
-    // Only learn from Tier 2+ content analysis — these are real findings
-    // about what the domain actually serves (phishing HTML, JS obfuscation, etc.)
-    let dominated_by_content = entry.threat_tier
-        .map(|t| t >= conduit_common::types::ThreatTier::Tier2)
-        .unwrap_or(false);
+    let was_blocked = entry.threat_blocked.unwrap_or(false);
+    let tier = entry.threat_tier.unwrap_or(conduit_common::types::ThreatTier::Tier0);
 
-    // Require: Tier 2+ AND minimum blended score 0.5.
-    // Low scores mean heuristics were clean — likely a legitimate login page.
+    // Tier 2+ content analysis — real findings about domain content
+    let dominated_by_content = tier >= conduit_common::types::ThreatTier::Tier2;
+
     let threat_score_val = entry.threat_score.unwrap_or(0.0);
-    if !dominated_by_content || threat_score_val < 0.5 {
+
+    // Learn from: blocks at Tier 1+ OR Tier 2+ with score >= 0.5
+    // Tier 0 blocks are excluded — heuristic false positives shouldn't persist via reputation.
+    let blocked_with_evidence = was_blocked && tier >= conduit_common::types::ThreatTier::Tier1;
+    if !blocked_with_evidence && (!dominated_by_content || threat_score_val < 0.5) {
         return;
     }
 

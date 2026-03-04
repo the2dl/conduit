@@ -17,11 +17,11 @@ const CACHE_TTL_SECS: u64 = 60;
 /// Maximum number of cached domain → category entries.
 const CACHE_CAPACITY: usize = 10_000;
 
-/// Sentinel value for "we looked this up and it had no category".
-const NO_CATEGORY: &str = "\x00__none__";
+/// Label returned for domains not found in any category list.
+const UNCATEGORIZED: &str = "uncategorized";
 
 struct CachedCategory {
-    category: String, // NO_CATEGORY sentinel if uncategorized
+    category: String,
     inserted: Instant,
 }
 
@@ -50,35 +50,32 @@ pub async fn lookup_category(pool: &Arc<Pool>, domain: &str) -> Option<String> {
         let mut cache = CATEGORY_CACHE.lock();
         if let Some(entry) = cache.get(domain) {
             if entry.inserted.elapsed().as_secs() < CACHE_TTL_SECS {
-                let result = if entry.category == NO_CATEGORY {
-                    None
-                } else {
-                    Some(entry.category.clone())
-                };
                 trace!(domain, cached = true, "Category lookup (cache hit)");
-                return result;
+                return Some(entry.category.clone());
             }
             // Expired — remove and fall through to Redis
             cache.pop(domain);
         }
     }
 
-    // Cache miss — query Redis
-    let result = lookup_category_redis(pool, domain).await;
+    // Cache miss — query Redis, default to "uncategorized"
+    let category = lookup_category_redis(pool, domain)
+        .await
+        .unwrap_or_else(|| UNCATEGORIZED.to_string());
 
-    // Store in cache (including negative results to avoid repeated misses)
+    // Store in cache (including uncategorized to avoid repeated misses)
     {
         let mut cache = CATEGORY_CACHE.lock();
         cache.put(
             domain.to_string(),
             CachedCategory {
-                category: result.clone().unwrap_or_else(|| NO_CATEGORY.to_string()),
+                category: category.clone(),
                 inserted: Instant::now(),
             },
         );
     }
 
-    result
+    Some(category)
 }
 
 /// The actual Redis lookup with wildcard fallback.

@@ -480,6 +480,12 @@ const WEIGHT_PORT: f32 = 0.05;
 const WEIGHT_HOMOGLYPH: f32 = 0.20;
 const WEIGHT_BRAND_IMPERSONATION: f32 = 0.35;
 const WEIGHT_BLOOM: f32 = 0.30;
+const WEIGHT_NRD: f32 = 0.15;
+const NRD_SCORE_HIGH_ENTROPY: f32 = 0.5;   // NRD + entropy > 4.0 → likely DGA
+const NRD_SCORE_MED_ENTROPY: f32 = 0.3;    // NRD + entropy > 3.2 → suspicious
+const NRD_SCORE_BASELINE: f32 = 0.15;      // NRD alone → mild signal
+const NRD_ENTROPY_HIGH: f32 = 4.0;
+const NRD_ENTROPY_MED: f32 = 3.2;
 const WEIGHT_IP_REP: f32 = 0.25;
 
 /// Run all Tier 0 heuristics and return a combined score + signals.
@@ -492,6 +498,7 @@ pub fn evaluate_all(
     _reputation_score: Option<f32>, // unused since reputation refactor; kept for API compat
     dga_threshold: f32,
     bloom_hit: bool,
+    nrd_hit: bool,
     ip_bad: bool,
     homoglyph_enabled: bool,
     top_domains: &[String],
@@ -544,6 +551,28 @@ pub fn evaluate_all(
         };
         weighted_sum += sig.score * WEIGHT_BLOOM;
         weight_total += WEIGHT_BLOOM;
+        signals.push(sig);
+    }
+
+    // NRD hit (newly registered domain)
+    // Score depends on corroborating signals: NRD alone is mild, but NRD + entropy
+    // or NRD + homoglyph is a strong phishing indicator.
+    if nrd_hit {
+        let entropy = shannon_entropy(domain_without_tld(host));
+        let nrd_score = if entropy > NRD_ENTROPY_HIGH {
+            NRD_SCORE_HIGH_ENTROPY
+        } else if entropy > NRD_ENTROPY_MED {
+            NRD_SCORE_MED_ENTROPY
+        } else {
+            NRD_SCORE_BASELINE
+        };
+        let sig = ThreatSignal {
+            name: "nrd_hit".into(),
+            score: nrd_score,
+            tier: ThreatTier::Tier0,
+        };
+        weighted_sum += sig.score * WEIGHT_NRD;
+        weight_total += WEIGHT_NRD;
         signals.push(sig);
     }
 
@@ -613,7 +642,7 @@ mod tests {
     fn safe_domain() {
         let (score, signals) = evaluate_all(
             "google.com", 443, "/search?q=hello", "https",
-            None, None, 3.5, false, false, false, &[],
+            None, None, 3.5, false, false, false, false, &[],
         );
         assert!(score < 0.3, "google.com score={score}, signals={signals:?}");
     }
@@ -622,7 +651,7 @@ mod tests {
     fn dga_domain() {
         let (score, signals) = evaluate_all(
             "xk7m2p4q8r1w3z9.tk", 443, "/", "https",
-            None, None, 3.5, false, false, false, &[],
+            None, None, 3.5, false, false, false, false, &[],
         );
         assert!(score > 0.1, "DGA domain score={score}, signals={signals:?}");
     }
@@ -631,7 +660,7 @@ mod tests {
     fn bloom_hit_domain() {
         let (score, _) = evaluate_all(
             "example.com", 443, "/", "https",
-            None, None, 3.5, true, false, false, &[],
+            None, None, 3.5, true, false, false, false, &[],
         );
         assert!(score > 0.5, "bloom hit score={score}");
     }
@@ -714,7 +743,7 @@ mod tests {
         let top = vec!["google.com".to_string()];
         let (score, signals) = evaluate_all(
             "secure---sso--robinhud-com-auth.webflow.io", 443, "/", "https",
-            None, None, 3.5, false, false, true, &top,
+            None, None, 3.5, false, false, false, true, &top,
         );
         assert!(score > 0.4, "phishing domain should score high, got {score}");
         let sub_sig = signals.iter().find(|s| s.name.starts_with("suspicious_subdomain"));

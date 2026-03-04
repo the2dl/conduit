@@ -33,6 +33,7 @@ use tracing::{debug, info};
 pub struct ThreatEngine {
     pub config: ThreatConfig,
     pub bloom: RwLock<Bloom<str>>,
+    pub nrd_bloom: RwLock<Bloom<str>>,
     pub top_domains: Vec<String>,
     pub reputation_cache: Mutex<LruCache<String, reputation::CachedReputation>>,
     pub bad_cidrs: RwLock<Vec<IpNet>>,
@@ -117,9 +118,13 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
         rt.block_on(reputation::seed_cache_from_redis(&reputation_cache, &pool_clone));
     }
 
+    // NRD bloom filter — sized for ~1M domains at 0.1% FP rate (~1.2MB)
+    let nrd_bloom = bloom::new_bloom(1_000_000, 0.001);
+
     let engine = Arc::new(ThreatEngine {
         config: config.clone(),
         bloom: RwLock::new(bloom_filter),
+        nrd_bloom: RwLock::new(nrd_bloom),
         top_domains,
         reputation_cache,
         bad_cidrs: RwLock::new(bad_cidrs),
@@ -169,6 +174,12 @@ pub fn evaluate_request(
         }
     };
 
+    // NRD bloom filter: check if domain was recently registered
+    let nrd_hit = {
+        let nrd = engine.nrd_bloom.read();
+        bloom::contains(&nrd, host)
+    };
+
     // IP reputation
     let ip_bad = upstream_ip.map_or(false, |ip| {
         let cidrs = engine.bad_cidrs.read();
@@ -180,7 +191,7 @@ pub fn evaluate_request(
         host, port, path, scheme, category,
         None, // no reputation — deterministic
         config.dga_entropy_threshold,
-        bloom_hit, ip_bad,
+        bloom_hit, nrd_hit, ip_bad,
         config.homoglyph_detection,
         &engine.top_domains,
     );
@@ -234,7 +245,7 @@ pub fn evaluate_request(
 /// if reputation warrants blocking, or None if reputation has nothing to add.
 pub fn check_reputation(engine: &ThreatEngine, host: &str) -> Option<f32> {
     let rep = reputation::get_cached_score(&engine.reputation_cache, host)?;
-    if rep >= engine.config.tier0_block_threshold {
+    if rep >= engine.config.reputation_block_threshold {
         Some(rep)
     } else {
         None

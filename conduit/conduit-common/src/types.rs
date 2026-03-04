@@ -136,6 +136,7 @@ pub enum ThreatFeedType {
     DomainBlocklist,
     IpBlocklist,
     UrlBlocklist,
+    NrdList,
 }
 
 /// Per-domain reputation record.

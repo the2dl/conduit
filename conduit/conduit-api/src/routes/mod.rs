@@ -2,7 +2,7 @@ pub mod ca;
 pub mod categories;
 pub mod config;
 pub mod health;
-pub mod import_ut1;
+pub mod import;
 pub mod logs;
 pub mod nodes;
 pub mod policies;
@@ -155,7 +155,7 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .merge(categories::routes())
         .merge(policies::routes())
         .merge(config::routes())
-        .merge(import_ut1::routes())
+        .merge(import::routes())
         .merge(nodes::routes())
         .merge(threat::routes())
         .route_layer(middleware::from_fn(audit_log))

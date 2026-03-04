@@ -103,6 +103,7 @@ tier3_enabled = false
 # Reputation: learns per-domain trust over time
 reputation_enabled = true
 reputation_decay_hours = 168       # 1 week half-life
+reputation_block_threshold = 0.55  # lower than tier0 block (0.9) so blocks persist ~6 days
 
 # Bloom filter for threat feeds
 bloom_capacity = 2000000

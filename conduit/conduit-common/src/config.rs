@@ -120,6 +120,8 @@ pub struct ThreatConfig {
     pub reputation_enabled: bool,
     #[serde(default = "default_decay_hours")]
     pub reputation_decay_hours: u64,
+    #[serde(default = "default_reputation_block")]
+    pub reputation_block_threshold: f32,
 
     // Bloom filter / feeds
     #[serde(default = "default_bloom_cap")]
@@ -140,6 +142,7 @@ fn default_max_inspect() -> usize { 262144 }
 fn default_t3_behavior() -> String { "allow_and_flag".into() }
 fn default_t3_timeout() -> u64 { 5000 }
 fn default_decay_hours() -> u64 { 168 }
+fn default_reputation_block() -> f32 { 0.55 }
 fn default_bloom_cap() -> usize { 2_000_000 }
 fn default_bloom_fp() -> f64 { 0.001 }
 fn default_feed_refresh() -> u64 { 3600 }

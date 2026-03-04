@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use super::cert_cache::CertCache;
 use super::relay;
@@ -299,7 +299,7 @@ async fn handle_mitm(
         }
     }
 
-    info!(host = %host, port, upstream_ip = %upstream_ip, "MITM tunnel established, relaying HTTP");
+    debug!(host = %host, port, upstream_ip = %upstream_ip, "MITM tunnel established, relaying HTTP");
 
     // --- Inner HTTP relay with per-request logging ---
     relay::relay_loop(

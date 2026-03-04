@@ -59,8 +59,10 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
     info!(count = feeds.len(), "Refreshing threat feeds");
 
     let mut new_bloom = super::bloom::new_bloom(engine.config.bloom_capacity, engine.config.bloom_fp_rate);
+    let mut new_nrd_bloom = super::bloom::new_bloom(1_000_000, 0.001);
     let mut new_cidrs = Vec::new();
     let mut total_entries = 0u64;
+    let mut nrd_entries = 0u64;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -86,6 +88,10 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
                                 new_cidrs.push(ipnet::IpNet::from(ip));
                             }
                         }
+                        ThreatFeedType::NrdList => {
+                            super::bloom::insert(&mut new_nrd_bloom, &entry);
+                            nrd_entries += 1;
+                        }
                     }
                     count += 1;
                     total_entries += 1;
@@ -106,6 +112,11 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
         let mut bloom_guard = engine.bloom.write();
         *bloom_guard = new_bloom;
         super::bloom::save_to_redis(pool, &bloom_guard, total_entries).await;
+    }
+    if nrd_entries > 0 {
+        let mut nrd_guard = engine.nrd_bloom.write();
+        *nrd_guard = new_nrd_bloom;
+        info!(nrd_entries, "NRD bloom filter updated");
     }
     {
         new_cidrs.sort();
