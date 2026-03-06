@@ -27,3 +27,5 @@ node_modules/
 
 # UI build output
 conduit-ui/build/
+domains_categorized.csv
+top-1m.csv
