@@ -7,7 +7,7 @@ listen_addr = "0.0.0.0:8888"
 api_addr = "0.0.0.0:8443"
 
 # Dragonfly (Redis-compatible) connection URL
-dragonfly_url = "redis://127.0.0.1:6379"
+dragonfly_url = "redis://127.0.0.1:6380"
 
 # CA certificate and key paths (auto-generated if absent)
 # ca_cert_path = "/etc/conduit/ca.pem"
@@ -72,6 +72,17 @@ fail_closed = true
 # enrollment_token = "one-time-token-from-enrollment"
 # hmac_key = "base64url-hmac-key-from-enrollment"
 
+# --- HTTP Response Cache ---
+# In-memory response cache with LRU eviction (like Squid).
+# Only caches GET/HEAD responses with cacheable Cache-Control headers.
+[cache]
+enabled = true
+max_cache_size = 134217728      # 128MB total cache
+max_file_size = 10485760        # 10MB max per response
+lock_timeout_secs = 5           # How long a reader waits for a writer
+stale_while_revalidate_secs = 60
+stale_if_error_secs = 300
+
 # --- Threat Detection ---
 [threat]
 enabled = true
@@ -80,8 +91,6 @@ enabled = true
 tier0_escalation_threshold = 0.3   # Score above this -> escalate to Tier 1
 tier0_block_threshold = 0.9        # Score above this -> block immediately
 dga_entropy_threshold = 3.5        # Shannon entropy threshold for DGA detection
-homoglyph_detection = true         # Detect typosquatting (g00gle.com, paypai.com)
-homoglyph_top_n = 1000
 
 # Tier 1: ML decision tree (runs on ~2-5% of requests that T0 flags)
 tier1_enabled = true
@@ -91,6 +100,7 @@ tier1_escalation_threshold = 0.5
 tier2_enabled = true
 tier2_escalation_threshold = 0.6
 max_inspect_bytes = 262144         # 256KB of response body inspected
+tier2_block_on_inspect = true      # Buffer suspicious responses and block phishing on first visit
 
 # Tier 3: LLM verdict -- OFF for now
 tier3_enabled = false
@@ -111,8 +121,8 @@ bloom_fp_rate = 0.0001
 feed_refresh_interval_secs = 3600  # Re-fetch feeds every hour
 
 [node]
-node_id = "node-122cad33-87b"
-dragonfly_url = "redis://node-122cad33-87b:LeXPLRdRVIYrn9XGMWVGBWmi0D0oEijz-Qc2a9DkLfw@127.0.0.1:6379"
-name = "node-122cad33-87b"
-enrollment_token = "PF8Pl2237Qhx3pt78Xp6QT4YBDNQxls8aRswMwSKA-w"
-hmac_key = "1tW43N9gEx7z-JV-gXErPqcWIHGwdk87uz_JBeMeQEI"
+node_id = "node-f5991746-db7"
+dragonfly_url = "redis://node-f5991746-db7:GfOcsabQAvOgYzmn39k_gpINLfFahy7SNnVh1bi3XxQ@127.0.0.1:6380"
+name = "node-f5991746-db7"
+enrollment_token = "R7A-vW1iO-JXjAymoO_z1t6Ahq4opKVSt16w21NCXj0"
+hmac_key = "7AbdNO86gkM8qKGlCtzJzVus1Hf1tVa_WqacIZzaEEk"

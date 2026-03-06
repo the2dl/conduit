@@ -35,6 +35,7 @@ fn cache() -> &'static RwLock<Option<CachedRules>> {
 
 /// Evaluate all enabled policy rules against the request.
 /// Returns the action from the highest-priority matching rule, or Allow if none match.
+/// The third element is the human-readable rule name (when a rule matched).
 /// When `fail_closed` is true, requests are blocked if rules cannot be loaded.
 pub async fn evaluate(
     pool: &Arc<Pool>,
@@ -43,15 +44,15 @@ pub async fn evaluate(
     username: Option<&str>,
     groups: &[String],
     fail_closed: bool,
-) -> (PolicyAction, Option<String>) {
+) -> (PolicyAction, Option<String>, Option<String>) {
     let rules = match load_rules_cached(pool).await {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to load policy rules: {e}");
             if fail_closed {
-                return (PolicyAction::Block, None);
+                return (PolicyAction::Block, None, None);
             }
-            return (PolicyAction::Allow, None);
+            return (PolicyAction::Allow, None, None);
         }
     };
 
@@ -61,11 +62,12 @@ pub async fn evaluate(
         }
         if matches_rule(rule, domain, category, username, groups) {
             trace!(rule_id = %rule.id, action = ?rule.action, "Policy match");
-            return (rule.action, Some(rule.id.clone()));
+            let name = if rule.name.is_empty() { None } else { Some(rule.name.clone()) };
+            return (rule.action, Some(rule.id.clone()), name);
         }
     }
 
-    (PolicyAction::Allow, None)
+    (PolicyAction::Allow, None, None)
 }
 
 /// Load rules from cache if fresh, otherwise reload from Dragonfly.

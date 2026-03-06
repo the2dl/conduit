@@ -34,30 +34,9 @@ pub struct ThreatEngine {
     pub config: ThreatConfig,
     pub bloom: RwLock<Bloom<str>>,
     pub nrd_bloom: RwLock<Bloom<str>>,
-    pub top_domains: Vec<String>,
     pub reputation_cache: Mutex<LruCache<String, reputation::CachedReputation>>,
     pub bad_cidrs: RwLock<Vec<IpNet>>,
     pub llm_tx: Option<mpsc::Sender<llm::LlmRequest>>,
-}
-
-/// Default top domains for homoglyph detection.
-fn default_top_domains() -> Vec<String> {
-    vec![
-        "google.com", "facebook.com", "amazon.com", "apple.com", "microsoft.com",
-        "netflix.com", "paypal.com", "instagram.com", "twitter.com", "linkedin.com",
-        "youtube.com", "github.com", "reddit.com", "whatsapp.com", "dropbox.com",
-        "chase.com", "wellsfargo.com", "bankofamerica.com", "citibank.com",
-        "americanexpress.com", "usps.com", "fedex.com", "ups.com", "dhl.com",
-        "adobe.com", "office.com", "outlook.com", "hotmail.com", "yahoo.com",
-        "icloud.com", "slack.com", "zoom.us", "salesforce.com", "stripe.com",
-        "coinbase.com", "binance.com", "blockchain.com", "ebay.com", "walmart.com",
-        "target.com", "bestbuy.com", "costco.com", "homedepot.com",
-        "robinhood.com", "venmo.com", "zelle.com", "schwab.com", "fidelity.com",
-        "vanguard.com", "etrade.com", "tdameritrade.com",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
 }
 
 /// Initialize the threat engine.
@@ -86,14 +65,6 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
             .build()
             .expect("Failed to create threat init runtime");
         rt.block_on(ip_reputation::load_bad_cidrs(&pool_clone))
-    };
-
-    let top_domains = if config.homoglyph_detection {
-        let mut domains = default_top_domains();
-        domains.truncate(config.homoglyph_top_n);
-        domains
-    } else {
-        Vec::new()
     };
 
     let llm_tx = if config.tier3_enabled {
@@ -125,7 +96,6 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
         config: config.clone(),
         bloom: RwLock::new(bloom_filter),
         nrd_bloom: RwLock::new(nrd_bloom),
-        top_domains,
         reputation_cache,
         bad_cidrs: RwLock::new(bad_cidrs),
         llm_tx,
@@ -152,6 +122,9 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
 /// Deterministic request evaluation. Runs heuristics + bloom + Tier 1 ML.
 /// NO reputation input. Same domain + path = same score every time.
 /// Used by: proxy request_filter, service CONNECT handler, relay loop.
+///
+/// `cert_meta` and `sec_headers` are only available in the MITM relay path
+/// (after TLS handshake + response headers). Pass `None` from other callers.
 pub fn evaluate_request(
     engine: &ThreatEngine,
     host: &str,
@@ -160,6 +133,8 @@ pub fn evaluate_request(
     scheme: &str,
     category: Option<&str>,
     upstream_ip: Option<&str>,
+    cert_meta: Option<&heuristics::CertMeta>,
+    sec_headers: Option<&heuristics::SecurityHeaders>,
 ) -> ThreatVerdict {
     let config = &engine.config;
 
@@ -192,8 +167,8 @@ pub fn evaluate_request(
         None, // no reputation — deterministic
         config.dga_entropy_threshold,
         bloom_hit, nrd_hit, ip_bad,
-        config.homoglyph_detection,
-        &engine.top_domains,
+        cert_meta,
+        sec_headers,
     );
 
     let mut tier_reached = ThreatTier::Tier0;

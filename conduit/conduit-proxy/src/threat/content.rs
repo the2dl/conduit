@@ -7,7 +7,7 @@
 //! - Redirect chain abuse
 
 use conduit_common::types::{ThreatSignal, ThreatTier};
-use flate2::read::GzDecoder;
+use flate2::read::{DeflateDecoder, GzDecoder};
 use once_cell::sync::Lazy;
 use std::io::Read;
 use regex::RegexSet;
@@ -97,11 +97,6 @@ static PHISHING_PATTERNS: Lazy<RegexSet> = Lazy::new(|| {
         r"(?i)connecter|mot\s*de\s*passe|identifiant|connexion",
         r"(?i)iniciar\s*sesi|contrase|usuario|verificar\s*su\s*cuenta",
         r"(?i)accedi|password|nome\s*utente|verifica",
-        // Brand impersonation in page content
-        r"(?i)(docusign|docu\s*sign).*review",
-        r"(?i)(microsoft|office\s*365).*sign\s*in",
-        r"(?i)(apple\s*id|icloud).*verify",
-        r"(?i)paypal.*confirm",
         // Anti-analysis / evasion
         r"(?i)navigator\.webdriver",
         r#"(?i)document\.referrer\s*===?\s*["']"#,
@@ -155,24 +150,106 @@ fn detect_phishing_in_text(text: &str, host: &str) -> Vec<ThreatSignal> {
         }
     }
 
-    // Bonus: page title contains brand names but host doesn't match
-    if let Some(title_start) = text_lower.find("<title") {
-        let title_end = text_lower[title_start..].find("</title").unwrap_or(200) + title_start;
-        let title_text = &text_lower[title_start..title_end.min(text_lower.len())];
-        let brand_in_title = ["docusign", "microsoft", "apple", "paypal", "google", "amazon",
-                              "netflix", "facebook", "instagram", "chase", "wellsfargo", "bankofamerica"]
-            .iter()
-            .any(|brand| title_text.contains(brand) && !host.contains(brand));
-        if brand_in_title {
-            score = (score + 0.15_f32).min(0.95_f32);
-        }
-    }
-
     vec![ThreatSignal {
         name: format!("phishing_html({}matches)", matches.len()),
         score,
         tier: ThreatTier::Tier2,
     }]
+}
+
+// ---------------------------------------------------------------------------
+// Thin page detection
+// ---------------------------------------------------------------------------
+
+/// Detect HTML pages with almost no visible text content.
+/// Phishing captcha gates, blank loader shells, and JS-only redirectors all
+/// share the same trait: the page is mostly markup/script with very little
+/// human-readable text. Legitimate pages — even minimal ones — have headings,
+/// paragraphs, or navigation text.
+///
+/// Extracts visible text by stripping tags, then measures the ratio of text
+/// characters to total body size. Pages below a threshold are flagged.
+fn detect_thin_page(body: &[u8]) -> Vec<ThreatSignal> {
+    // Only works on UTF-8 HTML
+    let text = match std::str::from_utf8(body) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+
+    // Need a minimum body size to avoid flagging tiny legitimate responses
+    if body.len() < 512 {
+        return vec![];
+    }
+
+    let visible_chars = extract_visible_text_len(text);
+
+    // Ratio of visible text to total body
+    let ratio = visible_chars as f32 / body.len() as f32;
+
+    // Threshold: pages with < 5% visible text relative to body size.
+    // Typical web pages are 10-40% text. Pure loader/challenge shells are < 3%.
+    if ratio < 0.05 && visible_chars < 200 {
+        return vec![ThreatSignal {
+            name: format!("thin_page(visible={visible_chars},ratio={ratio:.3})"),
+            score: 0.3,
+            tier: ThreatTier::Tier2,
+        }];
+    }
+
+    vec![]
+}
+
+/// Count visible text characters by stripping HTML tags and script/style blocks.
+/// Operates directly on the original bytes with ASCII case-insensitive comparisons
+/// to avoid allocating a lowercased copy of the entire HTML body.
+fn extract_visible_text_len(html: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_tag = false;
+    let mut in_script = false;
+    let bytes = html.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if !in_tag && bytes[i] == b'<' {
+            // Check for <script (7 chars) or <style (6 chars) opening tags
+            if i + 7 <= len && bytes[i..i + 7].eq_ignore_ascii_case(b"<script") {
+                in_script = true;
+            } else if i + 6 <= len && bytes[i..i + 6].eq_ignore_ascii_case(b"<style") {
+                in_script = true;
+            }
+            // Check for </script> (9 chars) or </style> (8 chars) closing tags
+            if in_script {
+                if i + 9 <= len && bytes[i..i + 9].eq_ignore_ascii_case(b"</script>") {
+                    in_script = false;
+                    i += 9;
+                    continue;
+                } else if i + 8 <= len && bytes[i..i + 8].eq_ignore_ascii_case(b"</style>") {
+                    in_script = false;
+                    i += 8;
+                    continue;
+                }
+            }
+            in_tag = true;
+            i += 1;
+            continue;
+        }
+
+        if in_tag {
+            if bytes[i] == b'>' {
+                in_tag = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if !in_script && !bytes[i].is_ascii_whitespace() {
+            count += 1;
+        }
+        i += 1;
+    }
+
+    count
 }
 
 // ---------------------------------------------------------------------------
@@ -264,25 +341,66 @@ const MAX_DECOMPRESS: u64 = 1_048_576;
 /// Maximum compression ratio before we suspect a zip bomb.
 const MAX_COMPRESSION_RATIO: usize = 100;
 
-/// Try to decompress gzip/deflate content. Returns decompressed data or None.
+/// Zstandard frame magic: 0xFD2FB528 (little-endian).
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Try to decompress gzip/deflate/zstd/brotli content. Returns decompressed data or None.
 /// Guards against zip bombs via size limit AND compression ratio check.
-fn try_decompress(body: &[u8]) -> Option<Vec<u8>> {
+/// `content_encoding_br`: true when Content-Encoding indicates brotli (needed because
+/// brotli has no magic bytes — without the hint we'd try to decompress every binary blob).
+fn try_decompress(body: &[u8], content_encoding_br: bool) -> Option<Vec<u8>> {
+    if body.len() < 4 {
+        return None;
+    }
+
     // Gzip magic: 0x1f 0x8b
-    if body.len() >= 2 && body[0] == 0x1f && body[1] == 0x8b {
-        let mut decoder = GzDecoder::new(body);
+    if body[0] == 0x1f && body[1] == 0x8b {
+        return decompress_with_reader(GzDecoder::new(body), body.len());
+    }
+
+    // Zstandard magic: 0x28 0xB5 0x2F 0xFD
+    if body.starts_with(&ZSTD_MAGIC) {
+        return decompress_with_reader(zstd::Decoder::new(body).ok()?, body.len());
+    }
+
+    // Raw deflate (zlib): magic 0x78 {0x01, 0x5E, 0x9C, 0xDA}
+    if body[0] == 0x78 && matches!(body[1], 0x01 | 0x5E | 0x9C | 0xDA) {
+        return decompress_with_reader(DeflateDecoder::new(body), body.len());
+    }
+
+    // Brotli has no magic bytes — only attempt if the caller indicated brotli
+    // encoding. Without that hint we'd waste CPU attempting to decompress every
+    // binary blob (images, wasm, PDFs, etc.).
+    if content_encoding_br {
         let mut decompressed = Vec::new();
-        match decoder.by_ref().take(MAX_DECOMPRESS).read_to_end(&mut decompressed) {
-            Ok(_) if !decompressed.is_empty() => {
-                // Reject if compression ratio is suspiciously high (zip bomb)
-                if body.len() > 0 && decompressed.len() / body.len().max(1) > MAX_COMPRESSION_RATIO {
-                    return None;
-                }
-                Some(decompressed)
-            }
-            _ => None,
+        let mut reader = brotli::Decompressor::new(body, 4096);
+        if reader
+            .by_ref()
+            .take(MAX_DECOMPRESS)
+            .read_to_end(&mut decompressed)
+            .is_ok()
+            && !decompressed.is_empty()
+            && decompressed.len() / body.len().max(1) <= MAX_COMPRESSION_RATIO
+        {
+            return Some(decompressed);
         }
-    } else {
-        None
+    }
+
+    None
+}
+
+/// Helper: decompress using any `Read` impl with zip-bomb guards.
+fn decompress_with_reader<R: Read>(reader: R, compressed_len: usize) -> Option<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    let mut limited = reader.take(MAX_DECOMPRESS);
+    match limited.read_to_end(&mut decompressed) {
+        Ok(_) if !decompressed.is_empty() => {
+            if decompressed.len() / compressed_len.max(1) > MAX_COMPRESSION_RATIO {
+                return None;
+            }
+            Some(decompressed)
+        }
+        _ => None,
     }
 }
 
@@ -294,9 +412,35 @@ pub fn analyze_response(
     status_code: u16,
     location_header: Option<&str>,
 ) -> (f32, Vec<ThreatSignal>) {
-    // Decompress gzip/deflate if needed (proxied responses are often compressed)
+    analyze_response_inner(body, host, content_type, status_code, location_header, false)
+}
+
+/// Like `analyze_response` but with an explicit brotli hint.
+/// Pass `content_encoding_br = true` when the response had `Content-Encoding: br`.
+#[allow(dead_code)] // used in tests; will be called from relay when CE parsing is wired up
+pub fn analyze_response_with_encoding(
+    body: &[u8],
+    host: &str,
+    content_type: Option<&str>,
+    status_code: u16,
+    location_header: Option<&str>,
+    content_encoding_br: bool,
+) -> (f32, Vec<ThreatSignal>) {
+    analyze_response_inner(body, host, content_type, status_code, location_header, content_encoding_br)
+}
+
+fn analyze_response_inner(
+    body: &[u8],
+    host: &str,
+    content_type: Option<&str>,
+    status_code: u16,
+    location_header: Option<&str>,
+    content_encoding_br: bool,
+) -> (f32, Vec<ThreatSignal>) {
+    // Decompress if needed (proxied responses are often compressed).
+    // Brotli has no magic bytes so we require the caller to indicate it.
     let decompressed;
-    let body = if let Some(d) = try_decompress(body) {
+    let body = if let Some(d) = try_decompress(body, content_encoding_br) {
         decompressed = d;
         &decompressed[..]
     } else {
@@ -317,6 +461,11 @@ pub fn analyze_response(
     // ("Sign In", "Password", brand names) in JS bundles, not the HTML shell.
     if ct.contains("html") || ct.contains("javascript") || ct.is_empty() {
         all_signals.extend(detect_phishing_html(body, host));
+    }
+
+    // Thin page detection (HTML only) — flags loader shells, captcha gates, etc.
+    if ct.contains("html") || ct.is_empty() {
+        all_signals.extend(detect_thin_page(body));
     }
 
     // Suspicious binary
@@ -373,5 +522,90 @@ mod tests {
     fn redirect_to_different_domain() {
         let signals = detect_redirect_chain(302, Some("https://evil.com/login"), "bank.com");
         assert!(!signals.is_empty());
+    }
+
+    #[test]
+    fn brotli_decompression_phishing() {
+        // Compress a phishing HTML page with Brotli, then verify analyze_response detects it
+        let html = b"<html><body><form method='post'><input type='password' name='pass'>Sign In</form></body></html>";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut compressed, 4096, 6, 22);
+            std::io::Write::write_all(&mut writer, html).unwrap();
+        }
+        // Raw HTML should not be valid UTF-8... actually it is, but compressed data won't be
+        assert!(std::str::from_utf8(&compressed).is_err(), "compressed data should not be valid UTF-8");
+
+        let (score, signals) = analyze_response_with_encoding(
+            &compressed, "evil.top", Some("text/html"), 200, None, true,
+        );
+        assert!(
+            score > 0.0,
+            "brotli-compressed phishing HTML should be detected, score={score}, signals={signals:?}"
+        );
+        let has_phishing = signals.iter().any(|s| s.name.starts_with("phishing_html"));
+        assert!(has_phishing, "should detect phishing patterns after brotli decompression, signals={signals:?}");
+    }
+
+    #[test]
+    fn zstd_decompression_phishing() {
+        let html = b"<html><body><form method='post'><input type='password' name='pass'>Sign In</form></body></html>";
+        let compressed = zstd::encode_all(&html[..], 3).unwrap();
+        assert!(compressed.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]), "should have zstd magic");
+
+        let (score, signals) = analyze_response(
+            &compressed, "evil.top", Some("text/html"), 200, None,
+        );
+        assert!(
+            score > 0.0,
+            "zstd-compressed phishing HTML should be detected, score={score}, signals={signals:?}"
+        );
+        let has_phishing = signals.iter().any(|s| s.name.starts_with("phishing_html"));
+        assert!(has_phishing, "should detect phishing after zstd decompression, signals={signals:?}");
+    }
+
+    #[test]
+    fn gzip_decompression_still_works() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let html = b"<html><body><input type='password'>Sign In</body></html>";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        std::io::Write::write_all(&mut encoder, html).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let (score, _) = analyze_response(&compressed, "evil.top", Some("text/html"), 200, None);
+        assert!(score > 0.0, "gzip-compressed phishing should still be detected");
+    }
+
+    #[test]
+    fn thin_page_loader_shell() {
+        // Minimal HTML with scripts but almost no visible text
+        let html = br#"<html><head><title>.</title>
+        <script src="/static/app.js"></script><script src="/static/vendor.js"></script>
+        <link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/vendor.css">
+        </head><body><div id="root"></div>
+        <script>window.__config={api:"/api",ver:"3.2.1"};document.getElementById("root").innerHTML="";</script>
+        <script src="/challenge.js"></script><script src="/metrics.js"></script>
+        <noscript>Enable JavaScript</noscript></body></html>"#;
+        let sigs = detect_thin_page(html);
+        assert!(!sigs.is_empty(), "thin loader shell should flag, got {sigs:?}");
+    }
+
+    #[test]
+    fn thin_page_real_site() {
+        // Real page with substantial visible text
+        let html = br#"<html><head><title>Welcome to Example</title></head>
+        <body><header><nav>Home About Contact Products Blog</nav></header>
+        <main><h1>Welcome to Our Website</h1>
+        <p>We provide excellent services for our customers worldwide.
+        Our team of dedicated professionals is here to help you succeed
+        in your business endeavors. Contact us today to learn more about
+        what we can offer.</p>
+        <p>Founded in 2020, we have grown to serve thousands of clients
+        across multiple industries. Our commitment to quality and customer
+        satisfaction sets us apart from the competition.</p>
+        </main><footer>Copyright 2026 Example Inc. All rights reserved.</footer></body></html>"#;
+        let sigs = detect_thin_page(html);
+        assert!(sigs.is_empty(), "real page should not flag as thin, got {sigs:?}");
     }
 }

@@ -50,6 +50,9 @@ pub struct ClearGateConfig {
     /// Real-time threat detection configuration.
     #[serde(default)]
     pub threat: Option<ThreatConfig>,
+    /// HTTP response caching configuration.
+    #[serde(default)]
+    pub cache: Option<CacheConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,11 +85,6 @@ pub struct ThreatConfig {
     pub tier0_block_threshold: f32,
     #[serde(default = "default_dga_entropy")]
     pub dga_entropy_threshold: f32,
-    #[serde(default = "default_true")]
-    pub homoglyph_detection: bool,
-    #[serde(default = "default_homoglyph_n")]
-    pub homoglyph_top_n: usize,
-
     // Tier 1: ML model
     #[serde(default = "default_true")]
     pub tier1_enabled: bool,
@@ -100,6 +98,17 @@ pub struct ThreatConfig {
     pub tier2_escalation_threshold: f32,
     #[serde(default = "default_max_inspect")]
     pub max_inspect_bytes: usize,
+    /// When true, buffers HTML/JS responses from suspicious domains and runs
+    /// content analysis before forwarding. Blocks phishing on first visit at
+    /// the cost of ~10-50ms added latency for inspected pages only.
+    /// When false (default), content analysis runs after forwarding and only
+    /// blocks on subsequent visits via learned reputation.
+    #[serde(default)]
+    pub tier2_block_on_inspect: bool,
+    /// Maximum response body size (bytes) to buffer for first-visit blocking.
+    /// Responses larger than this fall back to streaming (post-hoc analysis).
+    #[serde(default = "default_max_buffer")]
+    pub max_buffer_bytes: usize,
 
     // Tier 3: LLM verdict
     #[serde(default)]
@@ -132,13 +141,42 @@ pub struct ThreatConfig {
     pub feed_refresh_interval_secs: u64,
 }
 
+/// HTTP response caching configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Max total cache size in bytes (default 128MB).
+    #[serde(default = "default_max_cache_size")]
+    pub max_cache_size: usize,
+    /// Max individual response body size to cache in bytes (default 10MB).
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size: usize,
+    /// Cache lock timeout in seconds (default 5).
+    #[serde(default = "default_lock_timeout")]
+    pub lock_timeout_secs: u64,
+    /// Default stale-while-revalidate grace period in seconds (default 60).
+    #[serde(default = "default_stale_while_revalidate")]
+    pub stale_while_revalidate_secs: u32,
+    /// Default stale-if-error grace period in seconds (default 300).
+    #[serde(default = "default_stale_if_error")]
+    pub stale_if_error_secs: u32,
+}
+
+fn default_max_cache_size() -> usize { 134_217_728 } // 128 MB
+fn default_max_file_size() -> usize { 10_485_760 } // 10 MB
+fn default_lock_timeout() -> u64 { 5 }
+fn default_stale_while_revalidate() -> u32 { 60 }
+fn default_stale_if_error() -> u32 { 300 }
+
 fn default_t0_escalate() -> f32 { 0.3 }
 fn default_t0_block() -> f32 { 0.9 }
 fn default_dga_entropy() -> f32 { 3.5 }
-fn default_homoglyph_n() -> usize { 1000 }
 fn default_t1_escalate() -> f32 { 0.5 }
 fn default_t2_escalate() -> f32 { 0.6 }
 fn default_max_inspect() -> usize { 262144 }
+fn default_max_buffer() -> usize { 1_048_576 } // 1 MB
 fn default_t3_behavior() -> String { "allow_and_flag".into() }
 fn default_t3_timeout() -> u64 { 5000 }
 fn default_decay_hours() -> u64 { 168 }
@@ -207,6 +245,7 @@ impl Default for ClearGateConfig {
             fail_closed: true,
             node: None,
             threat: None,
+            cache: None,
         }
     }
 }

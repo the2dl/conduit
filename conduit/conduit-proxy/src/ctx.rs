@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use conduit_common::types::{PolicyAction, ThreatVerdict, UserIdentity};
+use conduit_common::types::{BlockReason, PolicyAction, ThreatVerdict, UserIdentity};
+
+use crate::threat::heuristics::{CertMeta, SecurityHeaders};
 
 /// Per-request context carried through the Pingora filter chain.
 pub struct RequestContext {
@@ -20,6 +22,8 @@ pub struct RequestContext {
     pub response_bytes: u64,
     pub upstream_addr: Option<String>,
     pub threat_verdict: Option<ThreatVerdict>,
+    pub block_reason: Option<BlockReason>,
+    pub rule_name: Option<String>,
     /// Buffer for Tier 2 content inspection (first N bytes of response body).
     /// Only populated when Tier 1 escalated.
     pub threat_inspect_buffer: Option<Vec<u8>>,
@@ -27,6 +31,16 @@ pub struct RequestContext {
     pub response_content_type: Option<String>,
     /// Response Location header (captured for redirect chain analysis).
     pub response_location: Option<String>,
+    /// Whether caching was enabled for this request.
+    pub cache_enabled: bool,
+    /// Cache status string (hit, miss, expired, etc.).
+    pub cache_status: Option<String>,
+    /// MITM stream ID for tunnel pattern tracking and tunnel kill.
+    pub mitm_stream_id: Option<i32>,
+    /// Upstream TLS certificate metadata (captured in connected_to_upstream).
+    pub cert_meta: Option<CertMeta>,
+    /// Upstream response security headers (captured in response_filter).
+    pub security_headers: Option<SecurityHeaders>,
 }
 
 impl RequestContext {
@@ -49,9 +63,16 @@ impl RequestContext {
             response_bytes: 0,
             upstream_addr: None,
             threat_verdict: None,
+            block_reason: None,
+            rule_name: None,
             threat_inspect_buffer: None,
             response_content_type: None,
             response_location: None,
+            cache_enabled: false,
+            cache_status: None,
+            mitm_stream_id: None,
+            cert_meta: None,
+            security_headers: None,
         }
     }
 

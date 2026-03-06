@@ -26,6 +26,9 @@ pub struct LogEntry {
     pub upstream_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    /// Cache status for this request (hit, miss, expired, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_status: Option<String>,
     /// Node ID that generated this log entry (multi-node deployments).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
@@ -41,6 +44,15 @@ pub struct LogEntry {
     /// Whether the request was blocked by threat detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threat_blocked: Option<bool>,
+    /// Why the request was blocked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<BlockReason>,
+    /// Human-readable policy rule name that caused the block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_name: Option<String>,
+    /// Individual threat signal breakdown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threat_signals: Option<Vec<ThreatSignal>>,
 }
 
 /// How the user was identified.
@@ -72,6 +84,28 @@ pub enum PolicyAction {
 impl Default for PolicyAction {
     fn default() -> Self {
         Self::Allow
+    }
+}
+
+/// Why a request was blocked.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockReason {
+    Policy,
+    ThreatHeuristic,
+    ThreatReputation,
+    ThreatContent,
+    ThreatTunnelPattern,
+}
+
+impl std::fmt::Display for BlockReason {
+    /// Display matches the serde `rename_all = "snake_case"` convention.
+    /// If you add a variant, update this match AND verify via the test below.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Serialize via serde to guarantee Display == JSON representation.
+        let json = serde_json::to_string(self).unwrap_or_default();
+        // serde_json wraps in quotes: "policy" → strip them
+        f.write_str(json.trim_matches('"'))
     }
 }
 

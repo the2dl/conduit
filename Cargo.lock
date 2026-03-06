@@ -488,7 +488,18 @@ checksum = "d640d25bc63c50fb1f0b545ffd80207d2e10a4c965530809b40ba3386825c391"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
- "brotli-decompressor",
+ "brotli-decompressor 2.5.1",
+]
+
+[[package]]
+name = "brotli"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc97b8f16f944bba54f0433f07e30be199b6dc2bd25937444bbad560bcea29bd"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor 4.0.3",
 ]
 
 [[package]]
@@ -496,6 +507,16 @@ name = "brotli-decompressor"
 version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e2e4afe60d7dd600fdd3de8d0f08c2b7ec039712e3b6137ff98b7004e82de4f"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a334ef7c9e23abf0ce748e8cd309037da93e606ad52eb372e4ce327a0dcfbdfd"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -811,10 +832,12 @@ dependencies = [
  "bloomfilter",
  "boring",
  "boring-sys",
+ "brotli 7.0.0",
  "bytes",
  "chrono",
  "clap",
  "conduit-common",
+ "dashmap 6.1.0",
  "deadpool-redis",
  "flate2",
  "hmac",
@@ -827,6 +850,7 @@ dependencies = [
  "parking_lot",
  "pingora",
  "pingora-boringssl",
+ "pingora-cache",
  "pingora-core",
  "pingora-error",
  "pingora-http",
@@ -845,6 +869,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -3035,7 +3060,7 @@ version = "0.7.0"
 dependencies = [
  "ahash",
  "async-trait",
- "brotli",
+ "brotli 3.5.0",
  "bstr",
  "bytes",
  "chrono",

@@ -13,6 +13,30 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace};
 
+/// Categories representing first-party services whose content we trust.
+/// Domains in these categories have login forms and "Sign In" text legitimately,
+/// so T2 content analysis should NOT poison their reputation.
+///
+/// Categories like `cdn_infrastructure`, `domain_hosting`, `other`, etc. are
+/// intentionally excluded — those host user-generated content where phishing
+/// clones live and reputation should absolutely be written.
+const TRUSTED_CATEGORIES: &[&str] = &[
+    "search_engine",
+    "banking_finance",
+    "news_media",
+    "government",
+    "education",
+    "healthcare",
+    "streaming_entertainment",
+    "telecom_isp",
+];
+
+/// Returns true if the category represents a trusted first-party service
+/// whose reputation should not be poisoned by T2 content signals.
+pub fn is_trusted_category(category: Option<&str>) -> bool {
+    category.map_or(false, |c| TRUSTED_CATEGORIES.contains(&c))
+}
+
 /// Default LRU cache capacity.
 const DEFAULT_CACHE_CAP: usize = 10_000;
 
@@ -122,6 +146,15 @@ pub async fn update_from_log(
     // Tier 0 blocks are excluded — heuristic false positives shouldn't persist via reputation.
     let blocked_with_evidence = was_blocked && tier >= conduit_common::types::ThreatTier::Tier1;
     if !blocked_with_evidence && (!dominated_by_content || threat_score_val < 0.5) {
+        return;
+    }
+
+    // Don't poison reputation for trusted first-party categories (e.g.,
+    // search_engine, banking_finance). These sites legitimately contain login
+    // forms that T2 flags as phishing patterns. Hosting/infrastructure categories
+    // (cdn_infrastructure, domain_hosting) are intentionally NOT protected —
+    // phishing clones live there and reputation must be tracked.
+    if is_trusted_category(entry.category.as_deref()) {
         return;
     }
 

@@ -249,7 +249,7 @@ async fn export_logs(
 
     tokio::spawn(async move {
         if is_csv {
-            let _ = tx.send("\"timestamp\",\"client_ip\",\"username\",\"method\",\"host\",\"path\",\"category\",\"action\",\"status_code\",\"duration_ms\",\"node_id\",\"node_name\"\n".to_string()).await;
+            let _ = tx.send("\"timestamp\",\"client_ip\",\"username\",\"method\",\"host\",\"path\",\"category\",\"action\",\"status_code\",\"duration_ms\",\"node_id\",\"node_name\",\"block_reason\",\"rule_name\"\n".to_string()).await;
         }
 
         stream_filtered_entries(&state, &filter, is_csv, &tx).await;
@@ -346,8 +346,11 @@ async fn stream_filtered_entries(
 }
 
 fn format_csv_row(e: &LogEntry) -> String {
+    let block_reason = e.block_reason.as_ref()
+        .map(|r| r.to_string())
+        .unwrap_or_default();
     format!(
-        "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         csv_escape(&e.timestamp.to_string()),
         csv_escape(&e.client_ip),
         csv_escape(e.username.as_deref().unwrap_or("")),
@@ -360,6 +363,8 @@ fn format_csv_row(e: &LogEntry) -> String {
         csv_escape(&e.duration_ms.to_string()),
         csv_escape(e.node_id.as_deref().unwrap_or("")),
         csv_escape(e.node_name.as_deref().unwrap_or("")),
+        csv_escape(&block_reason),
+        csv_escape(e.rule_name.as_deref().unwrap_or("")),
     )
 }
 

@@ -78,9 +78,14 @@ fn format_rfc5424(entry: &LogEntry) -> String {
 
     let node_id = escape_sd_value(entry.node_id.as_deref().unwrap_or("-"));
     let node_name = escape_sd_value(entry.node_name.as_deref().unwrap_or("-"));
+    let block_reason = escape_sd_value(
+        &entry.block_reason.as_ref()
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
 
     format!(
-        "<{}>1 {} cleargate cleargate-proxy - - [meta action=\"{}\" category=\"{}\" user=\"{}\" node_id=\"{}\" node_name=\"{}\"] {} {} {} {}",
+        "<{}>1 {} cleargate cleargate-proxy - - [meta action=\"{}\" category=\"{}\" user=\"{}\" node_id=\"{}\" node_name=\"{}\" block_reason=\"{}\"] {} {} {} {}",
         priority,
         timestamp,
         action,
@@ -88,6 +93,7 @@ fn format_rfc5424(entry: &LogEntry) -> String {
         user,
         node_id,
         node_name,
+        block_reason,
         method,
         url,
         entry.status_code,

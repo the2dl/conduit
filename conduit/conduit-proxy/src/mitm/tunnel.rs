@@ -1,11 +1,14 @@
-use boring::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode};
+use boring::ssl::{SslAcceptor, SslMethod};
 use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
 use conduit_common::types::{AuthMethod, LogEntry, PolicyAction};
 use deadpool_redis::Pool;
 use pingora_boringssl::ext;
 use pingora_boringssl::tokio_ssl::SslStream;
+use pingora_core::apps::ServerApp;
 use pingora_core::protocols::Stream;
+use pingora_core::server::ShutdownWatch;
+use pingora_proxy::HttpProxy;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +17,9 @@ use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
 use super::cert_cache::CertCache;
-use super::relay;
+use super::stream::{self as mitm_stream, MitmContext, MitmStream};
 use crate::logging::LogSender;
+use crate::proxy::ClearGateProxy;
 
 const DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +33,8 @@ const BLOCK_PAGE_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Handle a CONNECT tunnel after the 200 response has already been sent.
 ///
-/// If `config.tls_intercept` is true: performs MITM interception with per-request logging.
+/// If `config.tls_intercept` is true: performs MITM interception by accepting TLS
+/// from the client, then routing the decrypted stream through Pingora's ProxyHttp pipeline.
 /// If false: passthrough mode — pipes encrypted bytes without inspection.
 pub async fn handle_connect_tunnel(
     downstream: Stream,
@@ -46,55 +51,60 @@ pub async fn handle_connect_tunnel(
     auth_method: Option<AuthMethod>,
     threat_score: Option<f32>,
     threat_tier: Option<conduit_common::types::ThreatTier>,
-    threat_engine: Option<Arc<crate::threat::ThreatEngine>>,
+    _threat_engine: Option<Arc<crate::threat::ThreatEngine>>,
+    http_proxy: Arc<HttpProxy<ClearGateProxy>>,
+    shutdown: ShutdownWatch,
 ) {
-    let addr = format!("{host}:{port}");
-    let start = chrono::Utc::now();
-
-    // --- DNS resolve + TCP connect (shared by both modes) ---
-    let resolved_addrs: Vec<std::net::SocketAddr> =
-        match tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(&addr)).await {
-            Ok(Ok(addrs)) => addrs.collect(),
-            Ok(Err(e)) => {
-                warn!(addr = %addr, "DNS resolution failed: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!(addr = %addr, "DNS resolution timed out");
-                return;
-            }
-        };
-
-    let Some(&resolved_addr) = resolved_addrs.first() else {
-        warn!(addr = %addr, "DNS resolved to zero addresses");
-        return;
-    };
-
-    // Block connections to private/loopback IPs to prevent SSRF
-    if is_private_ip(resolved_addr.ip()) {
-        warn!(addr = %addr, resolved = %resolved_addr, "Blocked connection to private IP (SSRF protection)");
-        return;
-    }
-
-    let upstream_ip = resolved_addr.to_string();
-
-    // Connect using the resolved SocketAddr to prevent DNS TOCTOU attacks
-    let upstream_tcp =
-        match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(resolved_addr)).await {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                warn!(addr = %addr, resolved = %upstream_ip, "Failed to connect upstream: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!(addr = %addr, resolved = %upstream_ip, "Connect timed out");
-                return;
-            }
-        };
-
     if config.tls_intercept {
-        handle_mitm(downstream, upstream_tcp, host, port, ca, cert_cache, &upstream_ip, &log_tx, &client_ip, category, username.as_deref(), auth_method, threat_engine).await;
+        // MITM: TLS accept on client side, then route through Pingora pipeline
+        handle_mitm(
+            downstream, host, port, ca, cert_cache,
+            &client_ip, category, username, auth_method,
+            http_proxy, shutdown,
+        ).await;
     } else {
+        // Passthrough: DNS resolve + TCP connect + bidirectional copy
+        let addr = format!("{host}:{port}");
+        let start = chrono::Utc::now();
+
+        let resolved_addrs: Vec<std::net::SocketAddr> =
+            match tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(&addr)).await {
+                Ok(Ok(addrs)) => addrs.collect(),
+                Ok(Err(e)) => {
+                    warn!(addr = %addr, "DNS resolution failed: {e}");
+                    return;
+                }
+                Err(_) => {
+                    warn!(addr = %addr, "DNS resolution timed out");
+                    return;
+                }
+            };
+
+        let Some(&resolved_addr) = resolved_addrs.first() else {
+            warn!(addr = %addr, "DNS resolved to zero addresses");
+            return;
+        };
+
+        if is_private_ip(resolved_addr.ip()) {
+            warn!(addr = %addr, resolved = %resolved_addr, "Blocked connection to private IP (SSRF protection)");
+            return;
+        }
+
+        let upstream_ip = resolved_addr.to_string();
+
+        let upstream_tcp =
+            match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(resolved_addr)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    warn!(addr = %addr, resolved = %upstream_ip, "Failed to connect upstream: {e}");
+                    return;
+                }
+                Err(_) => {
+                    warn!(addr = %addr, resolved = %upstream_ip, "Connect timed out");
+                    return;
+                }
+            };
+
         handle_passthrough(downstream, upstream_tcp, host, port, &upstream_ip, start, &log_tx, &client_ip, category, username.as_deref(), auth_method, threat_score, threat_tier).await;
     }
 }
@@ -227,23 +237,25 @@ pub async fn serve_block_page(
     let _ = writer.shutdown().await;
 }
 
-/// MITM mode: decrypt, parse inner HTTP, log per-request details, re-encrypt to upstream.
+/// MITM mode: accept TLS from client, wrap decrypted stream as MitmStream,
+/// then route through Pingora's ProxyHttp pipeline for full HTTP handling.
 async fn handle_mitm(
     downstream: Stream,
-    upstream_tcp: TcpStream,
     host: String,
     port: u16,
     ca: Arc<CertAuthority>,
     cert_cache: Arc<CertCache>,
-    upstream_ip: &str,
-    log_tx: &LogSender,
     client_ip: &str,
     category: Option<String>,
-    username: Option<&str>,
+    username: Option<String>,
     auth_method: Option<AuthMethod>,
-    threat_engine: Option<Arc<crate::threat::ThreatEngine>>,
+    http_proxy: Arc<HttpProxy<ClearGateProxy>>,
+    shutdown: ShutdownWatch,
 ) {
-    // --- TLS accept on downstream (MITM) ---
+    // Parse client_ip into a SocketAddr for the MitmStream's socket digest
+    let peer_addr: Option<std::net::SocketAddr> = client_ip.parse().ok();
+
+    // TLS accept on downstream (MITM)
     let downstream_tls = match mitm_accept(downstream, &host, &ca, &cert_cache).await {
         Some(s) => s,
         None => return,
@@ -251,71 +263,27 @@ async fn handle_mitm(
 
     debug!(host = %host, "MITM TLS accepted");
 
-    // --- TLS connect to upstream ---
-    let mut connector_builder = match SslConnector::builder(SslMethod::tls()) {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(host = %host, "Failed to build SSL connector: {e}");
-            return;
-        }
-    };
-    if let Err(e) = connector_builder.set_default_verify_paths() {
-        warn!(host = %host, "Failed to load system CA certificates, upstream TLS verification may fail: {e}");
-    }
-    connector_builder.set_verify(SslVerifyMode::PEER);
-    let connector = connector_builder.build();
+    // Wrap in MitmStream (implements Pingora's IO trait)
+    let mitm = MitmStream::new(downstream_tls, peer_addr);
+    let stream_id = mitm.id();
 
-    let ssl_config = match connector.configure() {
-        Ok(c) => match c.into_ssl(&host) {
-            Ok(ssl) => ssl,
-            Err(e) => {
-                warn!(host = %host, "Failed to configure upstream SSL: {e}");
-                return;
-            }
-        },
-        Err(e) => {
-            warn!(host = %host, "Failed to configure SSL connector: {e}");
-            return;
-        }
-    };
-
-    let mut upstream_tls = match SslStream::new(ssl_config, upstream_tcp) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!(host = %host, "Failed to create upstream TLS stream: {e}");
-            return;
-        }
-    };
-
-    match tokio::time::timeout(TLS_TIMEOUT, Pin::new(&mut upstream_tls).connect()).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            warn!(host = %host, "Upstream TLS handshake failed: {e}");
-            return;
-        }
-        Err(_) => {
-            warn!(host = %host, "Upstream TLS handshake timed out");
-            return;
-        }
-    }
-
-    debug!(host = %host, port, upstream_ip = %upstream_ip, "MITM tunnel established, relaying HTTP");
-
-    // --- Inner HTTP relay with per-request logging ---
-    relay::relay_loop(
-        downstream_tls,
-        upstream_tls,
-        &host,
+    // Register context for request_filter to pick up
+    mitm_stream::register_context(stream_id, MitmContext {
+        client_ip: client_ip.to_string(),
         port,
-        upstream_ip,
-        log_tx,
-        client_ip,
-        category.as_deref(),
         username,
         auth_method,
-        threat_engine,
-    )
-    .await;
+        category,
+        tunnel_killed: false,
+        tunnel_patterns: mitm_stream::TunnelPatterns::new(&host),
+    });
+
+    // Route through Pingora's ProxyHttp pipeline
+    let stream: Stream = Box::new(mitm);
+    let _ = http_proxy.process_new(stream, &shutdown).await;
+
+    // Clean up context
+    mitm_stream::remove_context(stream_id);
 
     debug!(host = %host, "MITM tunnel closed");
 }
@@ -364,11 +332,15 @@ async fn handle_passthrough(
                 tls_intercepted: false,
                 upstream_addr: Some(upstream_ip.to_string()),
                 content_type: None,
+                cache_status: None,
                 node_id: None,
                 node_name: None,
                 threat_score,
                 threat_tier,
                 threat_blocked: Some(false),
+                block_reason: None,
+                rule_name: None,
+                threat_signals: None,
             };
             log_tx.send(entry);
         }
@@ -379,7 +351,7 @@ async fn handle_passthrough(
 }
 
 /// Check if an IP address is in a private/reserved range (SSRF protection).
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
+pub(crate) fn is_private_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
             v4.is_loopback()          // 127.0.0.0/8
@@ -416,3 +388,4 @@ fn is_ipv4_mapped_private(v6: &std::net::Ipv6Addr) -> bool {
         false
     }
 }
+

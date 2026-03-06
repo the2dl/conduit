@@ -205,13 +205,7 @@ async fn fetch_and_parse(client: &reqwest::Client, feed: &ThreatFeed) -> anyhow:
         if line.contains(',') {
             for field in line.split(',') {
                 let field = field.trim().trim_matches('"');
-                if is_url_feed {
-                    if let Some(url) = normalize_url(field) {
-                        entries.push(url);
-                    }
-                } else if let Some(domain) = extract_domain_from_url(field) {
-                    entries.push(domain);
-                }
+                push_feed_field(field, is_url_feed, &mut entries);
             }
             continue;
         }
@@ -222,15 +216,13 @@ async fn fetch_and_parse(client: &reqwest::Client, feed: &ThreatFeed) -> anyhow:
         }
 
         // Plain list
-        if is_url_feed {
-            if let Some(url) = normalize_url(line) {
-                entries.push(url);
+        push_feed_field(line, is_url_feed, &mut entries);
+        if !is_url_feed && !line.contains(' ') {
+            // Bare domain or IP that extract_domain_from_url might not handle
+            let lower = line.to_lowercase();
+            if !entries.last().map_or(false, |e| *e == lower) {
+                entries.push(lower);
             }
-        } else if let Some(domain) = extract_domain_from_url(line) {
-            entries.push(domain);
-        } else if !line.contains(' ') {
-            // Bare domain or IP
-            entries.push(line.to_lowercase());
         }
     }
 
@@ -239,13 +231,7 @@ async fn fetch_and_parse(client: &reqwest::Client, feed: &ThreatFeed) -> anyhow:
         if let Ok(array) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
             for item in &array {
                 if let Some(url) = item.get("url").and_then(|u| u.as_str()) {
-                    if is_url_feed {
-                        if let Some(normalized) = normalize_url(url) {
-                            entries.push(normalized);
-                        }
-                    } else if let Some(domain) = extract_domain_from_url(url) {
-                        entries.push(domain);
-                    }
+                    push_feed_field(url, is_url_feed, &mut entries);
                 }
             }
         }
@@ -257,6 +243,23 @@ async fn fetch_and_parse(client: &reqwest::Client, feed: &ThreatFeed) -> anyhow:
 /// Normalize a URL to "host/path" format for bloom insertion.
 /// Strips scheme and port, lowercases the host.
 /// Example: "https://evil.com:8080/malware.exe" → "evil.com/malware.exe"
+/// Push entries into the bloom insertion list.
+/// For URL feeds: insert the normalized URL (host/path) only — NOT the bare domain.
+/// Inserting bare domains from URL feeds would block entire platforms like
+/// sites.google.com when only a specific page (sites.google.com/view/phish) is malicious.
+/// The bloom lookup already checks both `host` and `host+path`, so the URL-specific
+/// entry will match the phishing page without poisoning the whole domain.
+/// For domain feeds: insert the domain as-is.
+fn push_feed_field(field: &str, is_url_feed: bool, entries: &mut Vec<String>) {
+    if is_url_feed {
+        if let Some(url) = normalize_url(field) {
+            entries.push(url);
+        }
+    } else if let Some(domain) = extract_domain_from_url(field) {
+        entries.push(domain);
+    }
+}
+
 fn normalize_url(url: &str) -> Option<String> {
     let without_scheme = url
         .strip_prefix("https://")

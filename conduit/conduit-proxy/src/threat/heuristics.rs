@@ -1,5 +1,5 @@
 //! Tier 0 heuristic checks: DGA detection, TLD risk, suspicious paths,
-//! unusual ports, and homoglyph detection.
+//! unusual ports, mixed-script detection, cert risk, and security headers.
 
 use conduit_common::types::{ThreatSignal, ThreatTier};
 use once_cell::sync::Lazy;
@@ -62,6 +62,33 @@ static BAD_TLDS: Lazy<HashMap<&'static str, f32>> = Lazy::new(|| {
     m.insert("surf", 0.4);
     m.insert("rest", 0.4);
     m.insert("fit", 0.4);
+    // Abused commercial/generic TLDs
+    m.insert("shop", 0.5);
+    m.insert("store", 0.4);
+    m.insert("online", 0.4);
+    m.insert("site", 0.5);
+    m.insert("website", 0.4);
+    m.insert("live", 0.4);
+    m.insert("support", 0.5);
+    m.insert("center", 0.4);
+    m.insert("link", 0.5);
+    m.insert("club", 0.4);
+    m.insert("fun", 0.5);
+    m.insert("life", 0.3);
+    m.insert("world", 0.3);
+    m.insert("space", 0.4);
+    m.insert("vip", 0.5);
+    m.insert("one", 0.3);
+    // Disposable / abused short TLDs
+    m.insert("sbs", 0.6);
+    m.insert("cfd", 0.6);
+    m.insert("cyou", 0.5);
+    m.insert("icu", 0.5);
+    m.insert("lol", 0.4);
+    m.insert("mom", 0.5);
+    m.insert("hair", 0.4);
+    m.insert("quest", 0.4);
+    m.insert("boats", 0.4);
     m
 });
 
@@ -119,43 +146,6 @@ fn normalize_confusables(s: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect::<String>()
         .to_ascii_lowercase()
-}
-
-/// Simple edit distance (Levenshtein) for short strings.
-/// Early exit when length difference exceeds the typical threshold (2).
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let n = a.len();
-    let m = b.len();
-
-    // Fast path: if lengths differ by more than 2, distance is at least that
-    if n.abs_diff(m) > 2 {
-        return n.abs_diff(m);
-    }
-
-    if n == 0 { return m; }
-    if m == 0 { return n; }
-
-    let mut prev = vec![0usize; m + 1];
-    let mut curr = vec![0usize; m + 1];
-
-    for j in 0..=m {
-        prev[j] = j;
-    }
-
-    for i in 1..=n {
-        curr[0] = i;
-        for j in 1..=m {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[m]
 }
 
 // ---------------------------------------------------------------------------
@@ -220,11 +210,11 @@ pub fn tld_risk(host: &str) -> Vec<ThreatSignal> {
         return vec![];
     }
 
-    // Known-bad → strong signal
+    // Known-bad → strong signal (raw values in BAD_TLDS are already calibrated)
     if let Some(&risk) = BAD_TLDS.get(tld) {
         return vec![ThreatSignal {
             name: "tld_risk_bad".into(),
-            score: risk * 0.3,
+            score: risk,
             tier: ThreatTier::Tier0,
         }];
     }
@@ -232,7 +222,7 @@ pub fn tld_risk(host: &str) -> Vec<ThreatSignal> {
     // Unknown TLD — not trusted, not known-bad. Mild flag.
     vec![ThreatSignal {
         name: "tld_risk_unknown".into(),
-        score: 0.15 * 0.3,
+        score: 0.15,
         tier: ThreatTier::Tier0,
     }]
 }
@@ -293,42 +283,19 @@ pub fn unusual_port(port: u16) -> Vec<ThreatSignal> {
     }
 }
 
-/// Check for homoglyph/typosquatting attacks against top domains.
-pub fn homoglyph_check(host: &str, top_domains: &[String]) -> Vec<ThreatSignal> {
-    let host_lower = host.to_ascii_lowercase();
-
-    // Skip if the host IS a top domain exactly (not suspicious)
-    if top_domains.iter().any(|d| d == &host_lower) {
-        return vec![];
-    }
-
+/// Domain-agnostic mixed-script / confusable character detection.
+/// Flags any domain containing Unicode confusables (Cyrillic lookalikes, digit substitutions)
+/// regardless of which brand it might be targeting.
+pub fn mixed_script_check(host: &str) -> Vec<ThreatSignal> {
     let normalized = normalize_confusables(host);
-
-    // Check: does normalizing confusables make it match a top domain?
-    // If so, the original was using homoglyphs to impersonate.
-    for top_domain in top_domains {
-        if normalized == *top_domain {
-            return vec![ThreatSignal {
-                name: format!("homoglyph_{top_domain}"),
-                score: 0.8,
-                tier: ThreatTier::Tier0,
-            }];
-        }
+    if normalized != host.to_ascii_lowercase() {
+        // Domain contains confusable characters
+        return vec![ThreatSignal {
+            name: "mixed_script".into(),
+            score: 0.7,
+            tier: ThreatTier::Tier0,
+        }];
     }
-
-    // Check for close edit-distance matches
-    for top_domain in top_domains {
-        let dist = edit_distance(&normalized, top_domain);
-        if dist > 0 && dist <= 2 {
-            let score = if dist == 1 { 0.7 } else { 0.4 };
-            return vec![ThreatSignal {
-                name: format!("homoglyph_{top_domain}"),
-                score,
-                tier: ThreatTier::Tier0,
-            }];
-        }
-    }
-
     vec![]
 }
 
@@ -468,18 +435,57 @@ pub fn suspicious_subdomain(host: &str) -> Vec<ThreatSignal> {
     }]
 }
 
+/// Detect phishing keywords in the second-level domain (SLD) itself.
+/// Catches domains like `sso-auth.com`, `login-verify.net`, `secure-update.com`
+/// where the domain name is constructed from auth/security keywords.
+/// Only fires when ≥2 keywords appear (a single keyword like `auth.com` is ambiguous).
+fn phishing_keywords_in_domain(host: &str) -> Vec<ThreatSignal> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() < 2 {
+        return vec![];
+    }
+    // SLD is the label before the TLD (e.g., "sso-auth" in "sso-auth.com")
+    let sld = parts[parts.len() - 2].to_ascii_lowercase();
+
+    // Split SLD on dashes to get individual words
+    let words: Vec<&str> = sld.split('-').collect();
+    let keyword_count = PHISHING_KEYWORDS
+        .iter()
+        .filter(|kw| words.iter().any(|w| w == *kw))
+        .count();
+
+    if keyword_count >= 2 {
+        return vec![ThreatSignal {
+            name: format!("phishing_domain_keywords({keyword_count})"),
+            score: (keyword_count as f32 * 0.2).min(0.7),
+            tier: ThreatTier::Tier0,
+        }];
+    }
+
+    vec![]
+}
+
 // ---------------------------------------------------------------------------
 // Master evaluation
 // ---------------------------------------------------------------------------
 
 /// Weights for combining signals into a final Tier 0 score.
+///
+/// These weights intentionally sum to much more than 1.0 because only the
+/// weights of *active* (fired) signals are included in normalization. The
+/// final score is `weighted_sum / weight_total` where `weight_total` is the
+/// sum of weights for signals that actually fired. This means each signal's
+/// effective contribution depends on which *other* signals also fired — a
+/// high-weight signal like bloom (0.60) dominates when it fires alone, but
+/// is diluted when many weak signals also fire. The floor logic below
+/// prevents that dilution from suppressing strong indicators.
 const WEIGHT_DGA: f32 = 0.25;
-const WEIGHT_TLD: f32 = 0.15;
+const WEIGHT_TLD: f32 = 0.25;
 const WEIGHT_PATH: f32 = 0.20;
 const WEIGHT_PORT: f32 = 0.05;
-const WEIGHT_HOMOGLYPH: f32 = 0.20;
+const WEIGHT_MIXED_SCRIPT: f32 = 0.20;
 const WEIGHT_BRAND_IMPERSONATION: f32 = 0.35;
-const WEIGHT_BLOOM: f32 = 0.30;
+const WEIGHT_BLOOM: f32 = 0.60;
 const WEIGHT_NRD: f32 = 0.15;
 const NRD_SCORE_HIGH_ENTROPY: f32 = 0.5;   // NRD + entropy > 4.0 → likely DGA
 const NRD_SCORE_MED_ENTROPY: f32 = 0.3;    // NRD + entropy > 3.2 → suspicious
@@ -487,6 +493,114 @@ const NRD_SCORE_BASELINE: f32 = 0.15;      // NRD alone → mild signal
 const NRD_ENTROPY_HIGH: f32 = 4.0;
 const NRD_ENTROPY_MED: f32 = 3.2;
 const WEIGHT_IP_REP: f32 = 0.25;
+const WEIGHT_CERT: f32 = 0.20;
+const WEIGHT_SEC_HEADERS: f32 = 0.10;
+const WEIGHT_UNCATEGORIZED: f32 = 0.10;
+
+/// Check whether a TLD is in the trusted set.
+pub fn is_trusted_tld(host: &str) -> bool {
+    TRUSTED_TLDS.contains(extract_tld(host))
+}
+
+/// Check whether a TLD is in the known-bad set.
+pub fn is_bad_tld(host: &str) -> bool {
+    BAD_TLDS.contains_key(extract_tld(host))
+}
+
+/// TLS certificate metadata extracted from upstream handshake.
+pub struct CertMeta {
+    pub issuer_org: Option<String>,
+    pub not_before_unix: Option<i64>,
+    pub not_after_unix: Option<i64>,
+    pub san_count: u16,
+}
+
+/// Certificate risk scoring — domain-agnostic.
+/// Free CA + bad TLD, or fresh cert + bad TLD, are strong phishing indicators.
+pub fn cert_risk(host: &str, meta: &CertMeta) -> Vec<ThreatSignal> {
+    let bad_tld = is_bad_tld(host);
+    if !bad_tld {
+        return vec![];
+    }
+
+    let mut score = 0.0f32;
+
+    // Free CA + bad TLD
+    if let Some(ref issuer) = meta.issuer_org {
+        let issuer_lower = issuer.to_ascii_lowercase();
+        if issuer_lower.contains("let's encrypt")
+            || issuer_lower.contains("zerossl")
+            || issuer_lower.contains("buypass")
+        {
+            score += 0.2;
+        }
+    }
+
+    // Fresh cert + bad TLD
+    if let Some(not_before) = meta.not_before_unix {
+        let now = chrono::Utc::now().timestamp();
+        let age_secs = now - not_before;
+        if age_secs < 86400 {
+            // Within 24 hours — very fresh
+            score += 0.3;
+        } else if age_secs < 7 * 86400 {
+            // Within 7 days
+            score += 0.15;
+        }
+    }
+
+    // Short-lived cert + bad TLD (phishing certs rarely exceed 90 days)
+    if let (Some(nb), Some(na)) = (meta.not_before_unix, meta.not_after_unix) {
+        let validity_days = (na - nb) / 86400;
+        if validity_days <= 90 {
+            score += 0.1;
+        }
+    }
+
+    // Wildcard/multi-SAN certs on bad TLDs — shared hosting or cert farms
+    if meta.san_count > 50 {
+        score += 0.1;
+    }
+
+    if score > 0.0 {
+        vec![ThreatSignal {
+            name: "cert_risk".into(),
+            score: score.min(1.0),
+            tier: ThreatTier::Tier0,
+        }]
+    } else {
+        vec![]
+    }
+}
+
+/// Response security header presence flags.
+pub struct SecurityHeaders {
+    pub has_hsts: bool,
+    pub has_csp: bool,
+    pub has_xfo: bool,
+    pub has_xcto: bool,
+}
+
+/// Security header scoring — missing security headers on non-trusted TLDs.
+pub fn security_header_score(host: &str, headers: &SecurityHeaders) -> Vec<ThreatSignal> {
+    // Only score for non-trusted TLDs (legitimate .com sites sometimes miss headers too)
+    if is_trusted_tld(host) {
+        return vec![];
+    }
+
+    let all_missing = !headers.has_hsts && !headers.has_csp && !headers.has_xfo && !headers.has_xcto;
+    if !all_missing {
+        return vec![];
+    }
+
+    let score = if is_bad_tld(host) { 0.25 } else { 0.15 };
+
+    vec![ThreatSignal {
+        name: "missing_security_headers".into(),
+        score,
+        tier: ThreatTier::Tier0,
+    }]
+}
 
 /// Run all Tier 0 heuristics and return a combined score + signals.
 pub fn evaluate_all(
@@ -494,14 +608,14 @@ pub fn evaluate_all(
     port: u16,
     path: &str,
     _scheme: &str,
-    _category: Option<&str>,
+    category: Option<&str>,
     _reputation_score: Option<f32>, // unused since reputation refactor; kept for API compat
     dga_threshold: f32,
     bloom_hit: bool,
     nrd_hit: bool,
     ip_bad: bool,
-    homoglyph_enabled: bool,
-    top_domains: &[String],
+    cert_meta: Option<&CertMeta>,
+    sec_headers: Option<&SecurityHeaders>,
 ) -> (f32, Vec<ThreatSignal>) {
     let mut signals = Vec::new();
     let mut weighted_sum = 0.0f32;
@@ -540,13 +654,13 @@ pub fn evaluate_all(
     }
     signals.extend(port_signals);
 
-    // Bloom filter hit (from threat feeds)
-    // Score 0.6: strong signal but not enough to block alone (bloom has false positives).
-    // Needs corroboration from other signals to reach block threshold.
+    // Bloom filter hit (from threat feeds).
+    // This is ground truth — the domain/URL is on a known phishing or malware feed.
+    // Score 0.95: near-certain, only tempered by bloom false positive possibility.
     if bloom_hit {
         let sig = ThreatSignal {
             name: "bloom_hit".into(),
-            score: 0.6,
+            score: 0.95,
             tier: ThreatTier::Tier0,
         };
         weighted_sum += sig.score * WEIGHT_BLOOM;
@@ -555,8 +669,6 @@ pub fn evaluate_all(
     }
 
     // NRD hit (newly registered domain)
-    // Score depends on corroborating signals: NRD alone is mild, but NRD + entropy
-    // or NRD + homoglyph is a strong phishing indicator.
     if nrd_hit {
         let entropy = shannon_entropy(domain_without_tld(host));
         let nrd_score = if entropy > NRD_ENTROPY_HIGH {
@@ -588,17 +700,32 @@ pub fn evaluate_all(
         signals.push(sig);
     }
 
-    // Homoglyph check (only when entropy is suspicious-ish)
-    if homoglyph_enabled && !top_domains.is_empty() {
-        let entropy = shannon_entropy(domain_without_tld(host));
-        if entropy >= 2.0 {
-            let hg = homoglyph_check(host, top_domains);
-            if let Some(s) = hg.first() {
-                weighted_sum += s.score * WEIGHT_HOMOGLYPH;
-                weight_total += WEIGHT_HOMOGLYPH;
-            }
-            signals.extend(hg);
+    // Mixed-script / confusable character detection (replaces homoglyph brand matching)
+    let ms = mixed_script_check(host);
+    if let Some(s) = ms.first() {
+        weighted_sum += s.score * WEIGHT_MIXED_SCRIPT;
+        weight_total += WEIGHT_MIXED_SCRIPT;
+    }
+    signals.extend(ms);
+
+    // Certificate risk (free CA + bad TLD, fresh cert + bad TLD)
+    if let Some(meta) = cert_meta {
+        let cr = cert_risk(host, meta);
+        if let Some(s) = cr.first() {
+            weighted_sum += s.score * WEIGHT_CERT;
+            weight_total += WEIGHT_CERT;
         }
+        signals.extend(cr);
+    }
+
+    // Security header scoring (missing headers on non-trusted TLDs)
+    if let Some(headers) = sec_headers {
+        let sh = security_header_score(host, headers);
+        if let Some(s) = sh.first() {
+            weighted_sum += s.score * WEIGHT_SEC_HEADERS;
+            weight_total += WEIGHT_SEC_HEADERS;
+        }
+        signals.extend(sh);
     }
 
     // Suspicious subdomain structure (phishing patterns, free hosting, auth keywords)
@@ -609,6 +736,34 @@ pub fn evaluate_all(
     }
     signals.extend(sub_signals);
 
+    // Phishing keywords in base domain (e.g., sso-auth.com, login-verify.com).
+    // suspicious_subdomain only fires for ≥3 labels — this catches 2-label domains
+    // whose SLD contains auth/security keywords that legitimate domains rarely use.
+    let domain_keyword_signals = phishing_keywords_in_domain(host);
+    if let Some(s) = domain_keyword_signals.first() {
+        weighted_sum += s.score * WEIGHT_BRAND_IMPERSONATION;
+        weight_total += WEIGHT_BRAND_IMPERSONATION;
+    }
+    signals.extend(domain_keyword_signals);
+
+    // Uncategorized domain — not in any known category database.
+    // Legitimate popular sites are almost always categorized; an uncategorized
+    // domain is a mild corroborating signal (not enough to flag on its own).
+    // Skip for bad TLDs — they already carry a strong tld_risk signal and
+    // adding uncategorized would dilute the weighted average.
+    let is_uncategorized = category.is_none()
+        || category == Some("uncategorized");
+    if is_uncategorized && !is_bad_tld(host) {
+        let sig = ThreatSignal {
+            name: "uncategorized".into(),
+            score: 0.15,
+            tier: ThreatTier::Tier0,
+        };
+        weighted_sum += sig.score * WEIGHT_UNCATEGORIZED;
+        weight_total += WEIGHT_UNCATEGORIZED;
+        signals.push(sig);
+    }
+
     // Normalize: weighted average of all signals
     let avg_score = if weight_total > 0.0 {
         weighted_sum / weight_total
@@ -617,11 +772,18 @@ pub fn evaluate_all(
     };
 
     // Floor logic: prevent weak signals from diluting strong ones.
-    // - 2+ signals with any strong one (>0.5): floor at 70% of max (prevents dilution)
-    // - 1 strong signal (>0.6): floor at 50% of max (single signal can't reach block alone)
     let max_raw = signals.iter().map(|s| s.score).fold(0.0f32, f32::max);
     let signal_count = signals.len();
-    let floor = if max_raw > 0.5 && signal_count >= 2 {
+
+    // Corroborated bloom: domain is on a known feed AND has a meaningful second signal.
+    // Require the corroborating signal to have score >= 0.25 to avoid trivial signals
+    // (e.g., unknown TLD at 0.15) from pushing bloom false positives to auto-block.
+    let has_bloom = signals.iter().any(|s| s.name == "bloom_hit");
+    let has_meaningful_corroboration = has_bloom && signals.iter()
+        .any(|s| s.name != "bloom_hit" && s.score >= 0.25);
+    let floor = if has_meaningful_corroboration {
+        0.95
+    } else if max_raw > 0.5 && signal_count >= 2 {
         max_raw * 0.7
     } else if max_raw > 0.6 {
         max_raw * 0.5
@@ -642,7 +804,7 @@ mod tests {
     fn safe_domain() {
         let (score, signals) = evaluate_all(
             "google.com", 443, "/search?q=hello", "https",
-            None, None, 3.5, false, false, false, false, &[],
+            None, None, 3.5, false, false, false, None, None,
         );
         assert!(score < 0.3, "google.com score={score}, signals={signals:?}");
     }
@@ -651,7 +813,7 @@ mod tests {
     fn dga_domain() {
         let (score, signals) = evaluate_all(
             "xk7m2p4q8r1w3z9.tk", 443, "/", "https",
-            None, None, 3.5, false, false, false, false, &[],
+            None, None, 3.5, false, false, false, None, None,
         );
         assert!(score > 0.1, "DGA domain score={score}, signals={signals:?}");
     }
@@ -660,9 +822,10 @@ mod tests {
     fn bloom_hit_domain() {
         let (score, _) = evaluate_all(
             "example.com", 443, "/", "https",
-            None, None, 3.5, true, false, false, false, &[],
+            None, None, 3.5, true, false, false, None, None,
         );
-        assert!(score > 0.5, "bloom hit score={score}");
+        // Bloom hit is ground truth — should score very high even alone
+        assert!(score > 0.6, "bloom hit score={score}");
     }
 
     #[test]
@@ -672,10 +835,10 @@ mod tests {
     }
 
     #[test]
-    fn homoglyph_detection() {
-        let top = vec!["google.com".to_string(), "paypal.com".to_string()];
-        let sigs = homoglyph_check("g00gle.com", &top);
-        assert!(!sigs.is_empty(), "should detect g00gle.com as homoglyph");
+    fn mixed_script_detection() {
+        // g00gle.com has digit substitutions (0→o) which normalize differently
+        let sigs = mixed_script_check("g00gle.com");
+        assert!(!sigs.is_empty(), "should detect g00gle.com as mixed-script confusable");
     }
 
     #[test]
@@ -705,7 +868,7 @@ mod tests {
         // Some obscure TLD not in either list → mild signal
         let sigs = tld_risk("example.horse");
         assert!(!sigs.is_empty());
-        assert!(sigs[0].score < 0.1, "unknown TLD should be mild, got {}", sigs[0].score);
+        assert!(sigs[0].score < 0.2, "unknown TLD should be mild, got {}", sigs[0].score);
     }
 
     #[test]
@@ -740,13 +903,109 @@ mod tests {
 
     #[test]
     fn suspicious_subdomain_full_pipeline() {
-        let top = vec!["google.com".to_string()];
         let (score, signals) = evaluate_all(
             "secure---sso--robinhud-com-auth.webflow.io", 443, "/", "https",
-            None, None, 3.5, false, false, false, true, &top,
+            None, None, 3.5, false, false, false, None, None,
         );
         assert!(score > 0.4, "phishing domain should score high, got {score}");
         let sub_sig = signals.iter().find(|s| s.name.starts_with("suspicious_subdomain"));
         assert!(sub_sig.is_some(), "should have suspicious_subdomain signal, signals={signals:?}");
+    }
+
+    #[test]
+    fn bad_tld_shop() {
+        let sigs = tld_risk("volksbank.shop");
+        assert!(!sigs.is_empty());
+        assert!(sigs[0].score >= 0.1, ".shop should be a bad TLD with decent score, got {}", sigs[0].score);
+    }
+
+    #[test]
+    fn cert_risk_free_ca_bad_tld() {
+        let meta = CertMeta {
+            issuer_org: Some("Let's Encrypt".into()),
+            not_before_unix: Some(chrono::Utc::now().timestamp() - 3600), // 1 hour old
+            not_after_unix: None,
+            san_count: 1,
+        };
+        let sigs = cert_risk("evil.shop", &meta);
+        assert!(!sigs.is_empty(), "should flag free CA + bad TLD");
+        assert!(sigs[0].score >= 0.4, "score should be high (fresh + free CA), got {}", sigs[0].score);
+    }
+
+    #[test]
+    fn cert_risk_free_ca_good_tld() {
+        let meta = CertMeta {
+            issuer_org: Some("Let's Encrypt".into()),
+            not_before_unix: None,
+            not_after_unix: None,
+            san_count: 1,
+        };
+        let sigs = cert_risk("example.com", &meta);
+        assert!(sigs.is_empty(), "free CA on .com should not flag");
+    }
+
+    #[test]
+    fn security_headers_missing_on_bad_tld() {
+        let headers = SecurityHeaders {
+            has_hsts: false,
+            has_csp: false,
+            has_xfo: false,
+            has_xcto: false,
+        };
+        let sigs = security_header_score("evil.shop", &headers);
+        assert!(!sigs.is_empty(), "missing all headers on bad TLD should flag");
+        assert!(sigs[0].score >= 0.2, "score should be >= 0.2, got {}", sigs[0].score);
+    }
+
+    #[test]
+    fn security_headers_missing_on_good_tld() {
+        let headers = SecurityHeaders {
+            has_hsts: false,
+            has_csp: false,
+            has_xfo: false,
+            has_xcto: false,
+        };
+        let sigs = security_header_score("example.com", &headers);
+        assert!(sigs.is_empty(), "missing headers on trusted TLD should not flag");
+    }
+
+    #[test]
+    fn phishing_domain_logwindoww_top() {
+        // Confirmed phishing site — should score high enough to trigger T2 inspection
+        let (score, signals) = evaluate_all(
+            "mobile.logwindoww.top", 443, "/", "https",
+            None, None, 3.5, false, false, false, None, None,
+        );
+        assert!(
+            score >= 0.5,
+            "mobile.logwindoww.top should score >= 0.5 (got {score}), signals={signals:?}"
+        );
+    }
+
+    #[test]
+    fn phishing_keywords_sso_auth() {
+        let sigs = phishing_keywords_in_domain("sso-auth.com");
+        assert!(!sigs.is_empty(), "sso-auth.com should flag phishing keywords");
+        assert!(sigs[0].score >= 0.3, "score should be meaningful, got {}", sigs[0].score);
+    }
+
+    #[test]
+    fn phishing_keywords_single_word_no_flag() {
+        let sigs = phishing_keywords_in_domain("auth.com");
+        assert!(sigs.is_empty(), "single keyword should not flag");
+    }
+
+    #[test]
+    fn sso_auth_com_full_pipeline() {
+        let (score, signals) = evaluate_all(
+            "sso-auth.com", 443, "/IusKPirFQ9x_", "https",
+            Some("uncategorized"), None, 3.5, false, false, false, None, None,
+        );
+        assert!(
+            score > 0.1,
+            "sso-auth.com should score > 0.1 (got {score}), signals={signals:?}"
+        );
+        let has_keyword = signals.iter().any(|s| s.name.starts_with("phishing_domain_keywords"));
+        assert!(has_keyword, "should have phishing_domain_keywords signal, signals={signals:?}");
     }
 }

@@ -17,6 +17,7 @@ pingora-proxy = { workspace = true }
 pingora-boringssl = { workspace = true }
 pingora-http = { workspace = true }
 pingora-error = { workspace = true }
+pingora-cache = { workspace = true }
 
 # Async
 tokio = { workspace = true }
@@ -41,6 +42,7 @@ boring-sys = { workspace = true }
 # Caching
 lru = { workspace = true }
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 
 # CLI
 clap = { workspace = true }
@@ -66,6 +68,8 @@ regex = { workspace = true }
 unicode-normalization = { workspace = true }
 reqwest = { workspace = true }
 flate2 = { workspace = true }
+brotli = { workspace = true }
+zstd = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 jemallocator = "0.5"

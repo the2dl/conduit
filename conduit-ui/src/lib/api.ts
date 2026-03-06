@@ -49,6 +49,9 @@ export interface LogEntry {
 	tls_intercepted: boolean;
 	node_id: string | null;
 	node_name: string | null;
+	block_reason?: string | null;
+	rule_name?: string | null;
+	threat_signals?: { name: string; score: number; tier: string }[] | null;
 }
 
 export interface CategoryEntry {
