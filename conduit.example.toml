@@ -1,0 +1,139 @@
+# Conduit Proxy — Example Configuration
+# Copy to conduit.toml and adjust for your environment.
+
+# Proxy listener address
+listen_addr = "0.0.0.0:8888"
+
+# Management API address
+api_addr = "0.0.0.0:8443"
+
+# Dragonfly (Redis-compatible) connection URL
+dragonfly_url = "redis://127.0.0.1:6380"
+
+# CA certificate and key paths (auto-generated if absent)
+# ca_cert_path = "/etc/conduit/ca.pem"
+# ca_key_path = "/etc/conduit/ca-key.pem"
+
+# TLS interception (MITM) — decrypt CONNECT tunnels to inspect full URLs
+# Set to false for passthrough mode (only logs CONNECT host:port)
+tls_intercept = true
+
+# Reject unauthenticated traffic with 407
+auth_required = true
+
+# Block when policy rules can't be loaded (Redis down). Default: true (fail-closed).
+fail_closed = true
+
+# API key for management API (optional)
+# api_key = "your-secret-api-key"
+
+# --- HTTP Response Cache ---
+# [cache]
+# enabled = true
+# max_cache_size = 134217728      # 128MB
+# max_file_size = 10485760        # 10MB per response
+# lock_timeout_secs = 5
+# stale_while_revalidate_secs = 60
+# stale_if_error_secs = 300
+
+# --- Threat Detection ---
+# [threat]
+# enabled = true
+# tier0_escalation_threshold = 0.3
+# tier0_block_threshold = 0.9
+# dga_entropy_threshold = 3.5
+# tier1_enabled = true
+# tier1_escalation_threshold = 0.5
+# tier2_enabled = true
+# tier2_escalation_threshold = 0.6
+# max_inspect_bytes = 262144       # 256KB
+# tier2_block_on_inspect = true
+# tier3_enabled = false
+# reputation_enabled = true
+# reputation_decay_hours = 168
+# reputation_block_threshold = 0.55
+# bloom_capacity = 2000000
+# bloom_fp_rate = 0.0001
+# feed_refresh_interval_secs = 3600
+
+# --- Timeout Hardening ---
+# [timeouts]
+# connect_timeout_secs = 10
+# total_connection_timeout_secs = 15
+# read_timeout_secs = 60
+# write_timeout_secs = 60
+# idle_timeout_secs = 300
+# request_timeout_secs = 0        # 0 = disabled
+
+# --- Request Size Limits ---
+# [request_limits]
+# max_request_header_size = 8192  # 8KB
+# max_request_body_size = 10485760 # 10MB
+
+# --- Graceful Shutdown ---
+# [shutdown]
+# grace_period_secs = 60
+# graceful_shutdown_timeout_secs = 300
+# upgrade_sock = "/tmp/conduit-upgrade.sock"
+
+# --- Rate Limiting ---
+# [rate_limit]
+# enabled = true
+# window_secs = 60
+# per_ip_limit = 200
+# per_user_limit = 0              # 0 = unlimited
+# per_destination_limit = 0
+
+# --- Connection Limits ---
+# [connection_limits]
+# enabled = true
+# max_connections_per_ip = 256
+
+# --- DNS Cache ---
+# [dns]
+# enabled = true
+# max_entries = 10000
+# min_ttl_secs = 30
+# max_ttl_secs = 3600
+# negative_ttl_secs = 30
+
+# --- Prometheus Metrics ---
+# [metrics]
+# enabled = true
+# listen_addr = "0.0.0.0:9090"
+
+# --- Load Balancing ---
+# [load_balancing]
+# enabled = true
+# [[load_balancing.upstreams]]
+# name = "my-cluster"
+# domains = ["api.internal.com", "*.api.internal.com"]
+# algorithm = "round_robin"
+# [[load_balancing.upstreams.backends]]
+# addr = "10.0.0.1:8080"
+# weight = 1
+# [[load_balancing.upstreams.backends]]
+# addr = "10.0.0.2:8080"
+# weight = 1
+
+# --- Data Loss Prevention ---
+# [dlp]
+# enabled = true
+# max_scan_size = 1048576          # 1MB scan limit
+# action = "log"                   # "log", "block", or "redact"
+# [[dlp.custom_patterns]]
+# name = "internal_id"
+# regex = "INTERNAL-\\d{8}"
+# action = "block"
+
+# --- HTTP/2 Downstream ---
+# [downstream]
+# h2c = true
+
+# --- Multi-Node ---
+# [node]
+# node_id = "node-xxxxxxxxxxxx"
+# dragonfly_url = "redis://node-xxxxxxxxxxxx:password@controlplane:6379"
+# name = "proxy-east-1"
+# enrollment_token = "one-time-token"
+# hmac_key = "base64url-hmac-key"
