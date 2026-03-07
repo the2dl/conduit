@@ -18,6 +18,8 @@ pingora-boringssl = { workspace = true }
 pingora-http = { workspace = true }
 pingora-error = { workspace = true }
 pingora-cache = { workspace = true }
+pingora-limits = { workspace = true }
+pingora-load-balancing = { workspace = true }
 
 # Async
 tokio = { workspace = true }
@@ -57,6 +59,8 @@ once_cell = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
+prometheus = { workspace = true }
+futures = { workspace = true }
 httparse = { workspace = true }
 tokio-stream = { workspace = true }
 hmac = { workspace = true }

@@ -53,6 +53,9 @@ pub struct LogEntry {
     /// Individual threat signal breakdown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threat_signals: Option<Vec<ThreatSignal>>,
+    /// DLP pattern names that matched on the request body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dlp_matches: Option<Vec<String>>,
 }
 
 /// How the user was identified.
@@ -96,6 +99,10 @@ pub enum BlockReason {
     ThreatReputation,
     ThreatContent,
     ThreatTunnelPattern,
+    RequestTooLarge,
+    RateLimited,
+    ConnectionLimit,
+    DlpViolation,
 }
 
 impl std::fmt::Display for BlockReason {

@@ -2,13 +2,19 @@
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
+mod conn_limit;
 mod ctx;
+mod dlp;
+mod dns_cache;
 mod identity;
+mod load_balancer;
 mod logging;
+mod metrics;
 mod mitm;
 mod node;
 mod policy;
 mod proxy;
+mod rate_limit;
 mod service;
 mod stats;
 mod threat;
@@ -25,7 +31,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::logging::LogSender;
 use crate::mitm::cert_cache::CertCache;
-use crate::proxy::ClearGateProxy;
+use crate::proxy::{ClearGateProxy, ProxyDeps, CacheComponents};
 use crate::service::ClearGateService;
 
 fn main() -> anyhow::Result<()> {
@@ -82,6 +88,20 @@ fn main() -> anyhow::Result<()> {
     // Bootstrap Pingora server
     let opt = Opt::parse_args();
     let mut server = Server::new(Some(opt))?;
+
+    // Apply shutdown config to Pingora's server configuration before bootstrap
+    if let Some(ref shutdown_cfg) = config.shutdown {
+        if let Some(conf) = Arc::get_mut(&mut server.configuration) {
+            conf.grace_period_seconds = Some(shutdown_cfg.grace_period_secs);
+            conf.graceful_shutdown_timeout_seconds = Some(shutdown_cfg.graceful_shutdown_timeout_secs);
+            conf.upgrade_sock = shutdown_cfg.upgrade_sock.clone();
+            conf.pid_file = shutdown_cfg.pid_file.clone();
+            if shutdown_cfg.daemon {
+                conf.daemon = true;
+            }
+        }
+    }
+
     server.bootstrap();
 
     // Initialize threat engine if configured (before logging pipeline so it can receive the Arc)
@@ -97,10 +117,13 @@ fn main() -> anyhow::Result<()> {
     // Spawn node lifecycle (heartbeat, pub/sub) if configured
     node::spawn_node_lifecycle(&config, &pool);
 
+    // Initialize Prometheus metrics server if configured
+    if let Some(ref metrics_cfg) = config.metrics {
+        metrics::init();
+        metrics::spawn_metrics_server(metrics_cfg);
+    }
+
     // Initialize HTTP response cache if configured
-    // Load zstd compression dictionary for cache metadata (reduces per-entry overhead at scale).
-    // NOTE: This uses the test dictionary from vendored Pingora. A production dictionary should
-    // be trained on real cache metadata; this is a best-effort default that gracefully degrades.
     {
         let dict_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../pingora/pingora-proxy/tests/headers.dict");
         if std::path::Path::new(dict_path).exists() {
@@ -112,83 +135,119 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Box::leak is used for cache components because Pingora's API requires `&'static`
-    // references. These are process-lifetime singletons — acceptable since the proxy
-    // process runs until termination and cache reconfiguration requires a restart.
-    let (cache_storage, cache_eviction, cache_lock, cache_meta_defaults, cache_max_file_size) =
-        if config.cache.as_ref().map(|c| c.enabled).unwrap_or(false) {
-            let cache_cfg = config.cache.as_ref().unwrap();
-            info!("HTTP response cache enabled (max_size={}MB, max_file={}MB)",
-                cache_cfg.max_cache_size / 1_048_576,
-                cache_cfg.max_file_size / 1_048_576);
+    let cache = if config.cache.as_ref().map(|c| c.enabled).unwrap_or(false) {
+        let cache_cfg = config.cache.as_ref().unwrap();
+        info!("HTTP response cache enabled (max_size={}MB, max_file={}MB)",
+            cache_cfg.max_cache_size / 1_048_576,
+            cache_cfg.max_file_size / 1_048_576);
 
-            let storage: &'static _ = Box::leak(Box::new(
-                pingora_cache::MemCache::new(),
-            ));
+        let storage: &'static _ = Box::leak(Box::new(
+            pingora_cache::MemCache::new(),
+        ));
 
-            // Estimate ~64KB average cached object for shard capacity hint
-            let estimated_items = cache_cfg.max_cache_size / 65_536;
-            let eviction: &'static _ = Box::leak(Box::new(
-                pingora_cache::eviction::lru::Manager::<8>::with_capacity(
-                    cache_cfg.max_cache_size,
-                    estimated_items / 8, // per-shard capacity
-                ),
-            ));
+        let estimated_items = cache_cfg.max_cache_size / 65_536;
+        let eviction: &'static _ = Box::leak(Box::new(
+            pingora_cache::eviction::lru::Manager::<8>::with_capacity(
+                cache_cfg.max_cache_size,
+                estimated_items / 8,
+            ),
+        ));
 
-            let lock: &'static _ = Box::leak(Box::new(
-                pingora_cache::lock::CacheLock::new(
-                    std::time::Duration::from_secs(cache_cfg.lock_timeout_secs),
-                ),
-            ));
+        let lock: &'static _ = Box::leak(Box::new(
+            pingora_cache::lock::CacheLock::new(
+                std::time::Duration::from_secs(cache_cfg.lock_timeout_secs),
+            ),
+        ));
 
-            let swr = cache_cfg.stale_while_revalidate_secs;
-            let sie = cache_cfg.stale_if_error_secs;
-            let defaults: &'static _ = Box::leak(Box::new(
-                pingora_cache::CacheMetaDefaults::new(
-                    |status| {
-                        use http::StatusCode;
-                        match status {
-                            StatusCode::OK | StatusCode::NON_AUTHORITATIVE_INFORMATION
-                            | StatusCode::MOVED_PERMANENTLY | StatusCode::NOT_FOUND
-                            | StatusCode::METHOD_NOT_ALLOWED | StatusCode::GONE => {
-                                Some(std::time::Duration::from_secs(3600))
-                            }
-                            StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => {
-                                Some(std::time::Duration::from_secs(3600))
-                            }
-                            _ => None,
+        let swr = cache_cfg.stale_while_revalidate_secs;
+        let sie = cache_cfg.stale_if_error_secs;
+        let defaults: &'static _ = Box::leak(Box::new(
+            pingora_cache::CacheMetaDefaults::new(
+                |status| {
+                    use http::StatusCode;
+                    match status {
+                        StatusCode::OK | StatusCode::NON_AUTHORITATIVE_INFORMATION
+                        | StatusCode::MOVED_PERMANENTLY | StatusCode::NOT_FOUND
+                        | StatusCode::METHOD_NOT_ALLOWED | StatusCode::GONE => {
+                            Some(std::time::Duration::from_secs(3600))
                         }
-                    },
-                    swr,
-                    sie,
-                ),
-            ));
+                        StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => {
+                            Some(std::time::Duration::from_secs(3600))
+                        }
+                        _ => None,
+                    }
+                },
+                swr,
+                sie,
+            ),
+        ));
 
-            (
-                Some(storage as &'static (dyn pingora_cache::storage::Storage + Sync)),
-                Some(eviction as &'static (dyn pingora_cache::eviction::EvictionManager + Sync)),
-                Some(lock as &'static pingora_cache::lock::CacheKeyLockImpl),
-                Some(defaults as &'static pingora_cache::CacheMetaDefaults),
-                cache_cfg.max_file_size,
-            )
-        } else {
-            (None, None, None, None, 0)
-        };
+        CacheComponents {
+            storage: Some(storage as &'static (dyn pingora_cache::storage::Storage + Sync)),
+            eviction: Some(eviction as &'static (dyn pingora_cache::eviction::EvictionManager + Sync)),
+            lock: Some(lock as &'static pingora_cache::lock::CacheKeyLockImpl),
+            meta_defaults: Some(defaults as &'static pingora_cache::CacheMetaDefaults),
+            max_file_size: cache_cfg.max_file_size,
+        }
+    } else {
+        CacheComponents::default()
+    };
+
+    // Initialize rate limiter
+    let rate_limiter = config.rate_limit.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(rate_limit::RateLimiter::new(c)));
+
+    // Initialize DNS cache
+    let dns_cache = config.dns.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(dns_cache::DnsCache::new(c)));
+
+    // Initialize upstream router (load balancing)
+    let upstream_router = config.load_balancing.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(load_balancer::UpstreamRouter::new(c)));
+
+    // Initialize DLP engine
+    let dlp_engine = config.dlp.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(dlp::DlpEngine::new(c)));
+
+    // Initialize connection tracker
+    let conn_tracker = config.connection_limits.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(conn_limit::ConnectionTracker::new(c)));
+
+    // Spawn periodic connection tracker cleanup.
+    // Uses a daemon thread — will terminate when the main process exits.
+    if let Some(ref tracker) = conn_tracker {
+        let tracker_clone = tracker.clone();
+        std::thread::Builder::new()
+            .name("conn-cleanup".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    tracker_clone.cleanup();
+                }
+            })
+            .expect("Failed to spawn connection cleanup thread");
+    }
 
     // Create the Pingora HttpProxy for handling plain HTTP requests
-    let proxy_inner = ClearGateProxy::new(
-        config.clone(),
-        pool.clone(),
-        ca.clone(),
-        cert_cache.clone(),
-        log_tx.clone(),
-        threat_engine.clone(),
-        cache_storage,
-        cache_eviction,
-        cache_lock,
-        cache_meta_defaults,
-        cache_max_file_size,
-    );
+    let deps = ProxyDeps {
+        config: config.clone(),
+        pool: pool.clone(),
+        ca: ca.clone(),
+        cert_cache: cert_cache.clone(),
+        log_tx: log_tx.clone(),
+        threat_engine: threat_engine.clone(),
+        cache,
+        rate_limiter: rate_limiter.clone(),
+        dns_cache: dns_cache.clone(),
+        upstream_router: upstream_router.clone(),
+        dlp_engine: dlp_engine.clone(),
+    };
+    let proxy_inner = ClearGateProxy::new(deps);
     let pingora_proxy = Arc::new(http_proxy(&server.configuration, proxy_inner));
 
     // Build the custom service that handles both CONNECT and HTTP
@@ -200,6 +259,8 @@ fn main() -> anyhow::Result<()> {
         log_tx: LogSender(log_tx),
         http_proxy: pingora_proxy,
         threat_engine,
+        rate_limiter,
+        conn_tracker,
     };
 
     let mut service =

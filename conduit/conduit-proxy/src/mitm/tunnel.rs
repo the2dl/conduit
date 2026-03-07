@@ -341,6 +341,7 @@ async fn handle_passthrough(
                 block_reason: None,
                 rule_name: None,
                 threat_signals: None,
+                dlp_matches: None,
             };
             log_tx.send(entry);
         }

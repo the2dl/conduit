@@ -120,6 +120,77 @@ bloom_capacity = 2000000
 bloom_fp_rate = 0.0001
 feed_refresh_interval_secs = 3600  # Re-fetch feeds every hour
 
+# --- Timeout Hardening ---
+[timeouts]
+connect_timeout_secs = 10
+total_connection_timeout_secs = 15
+read_timeout_secs = 60
+write_timeout_secs = 60
+idle_timeout_secs = 300
+request_timeout_secs = 0              # 0 = disabled
+
+# --- Request Size Limits ---
+[request_limits]
+max_request_header_size = 8192        # 8KB max headers
+max_request_body_size = 10485760      # 10MB max body
+
+# --- Graceful Shutdown ---
+[shutdown]
+grace_period_secs = 60
+graceful_shutdown_timeout_secs = 300
+upgrade_sock = "/tmp/conduit-upgrade.sock"
+
+# --- Rate Limiting ---
+# [rate_limit]
+# enabled = true
+# # WARNING: These are aggressive testing values. For production, use window_secs=60 and per_ip_limit=200+.
+# window_secs = 10
+# per_ip_limit = 5
+# per_user_limit = 0                    # unlimited per user
+# per_destination_limit = 0             # unlimited per destination
+
+# --- Connection Limits ---
+[connection_limits]
+enabled = true
+max_connections_per_ip = 256          # per-IP concurrent connection cap
+
+# --- DNS Cache ---
+[dns]
+enabled = true
+max_entries = 10000
+min_ttl_secs = 30
+max_ttl_secs = 3600
+negative_ttl_secs = 30
+
+# --- Prometheus Metrics ---
+[metrics]
+enabled = true
+listen_addr = "0.0.0.0:9091"
+
+# --- Load Balancing ---
+[load_balancing]
+enabled = true
+[[load_balancing.upstreams]]
+name = "test-cluster"
+domains = ["lb.test.local"]
+algorithm = "round_robin"
+[[load_balancing.upstreams.backends]]
+addr = "127.0.0.1:9001"
+weight = 1
+[[load_balancing.upstreams.backends]]
+addr = "127.0.0.1:9002"
+weight = 1
+
+# --- DLP ---
+[dlp]
+enabled = true
+max_scan_size = 1048576               # 1MB scan limit
+action = "block"
+
+# --- HTTP/2 Downstream ---
+[downstream]
+h2c = true
+
 [node]
 node_id = "node-f5991746-db7"
 dragonfly_url = "redis://node-f5991746-db7:GfOcsabQAvOgYzmn39k_gpINLfFahy7SNnVh1bi3XxQ@127.0.0.1:6380"

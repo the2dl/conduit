@@ -41,6 +41,14 @@ pub struct RequestContext {
     pub cert_meta: Option<CertMeta>,
     /// Upstream response security headers (captured in response_filter).
     pub security_headers: Option<SecurityHeaders>,
+    /// Accumulated request body bytes for size limiting.
+    pub request_body_accumulated: usize,
+    /// Buffer for DLP scanning of outbound request body.
+    pub dlp_body_buffer: Option<Vec<u8>>,
+    /// When true, upstream was selected by load balancer — skip SSRF check.
+    pub lb_routed: bool,
+    /// DLP pattern names that matched (populated at end of request body stream).
+    pub dlp_matches: Option<Vec<String>>,
 }
 
 impl RequestContext {
@@ -73,6 +81,10 @@ impl RequestContext {
             mitm_stream_id: None,
             cert_meta: None,
             security_headers: None,
+            request_body_accumulated: 0,
+            dlp_body_buffer: None,
+            lb_routed: false,
+            dlp_matches: None,
         }
     }
 

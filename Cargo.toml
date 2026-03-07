@@ -51,6 +51,8 @@ pingora-boringssl = { path = "pingora/pingora-boringssl" }
 pingora-http = { path = "pingora/pingora-http" }
 pingora-error = { path = "pingora/pingora-error" }
 pingora-cache = { path = "pingora/pingora-cache", features = ["boringssl"] }
+pingora-limits = { path = "pingora/pingora-limits" }
+pingora-load-balancing = { path = "pingora/pingora-load-balancing", features = ["boringssl"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -84,6 +86,10 @@ ipnet = "2"
 regex = "1"
 unicode-normalization = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+prometheus = "0.14"
+arc-swap = "1"
+fnv = "1"
+futures = "0.3"
 brotli = "7"
 zstd = "0.13"
 

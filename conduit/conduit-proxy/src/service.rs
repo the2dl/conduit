@@ -12,7 +12,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::HttpProxy;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Shared counters for heartbeat reporting.
 pub static TOTAL_REQUESTS: AtomicU64 = AtomicU64::new(0);
@@ -27,19 +27,16 @@ use crate::proxy::ClearGateProxy;
 use crate::threat::ThreatEngine;
 
 /// Custom ServerApp that handles both plain HTTP proxying and CONNECT tunneling.
-///
-/// For CONNECT requests: responds 200, extracts raw stream, pipes bidirectionally.
-/// For plain HTTP/HTTPS requests: delegates to Pingora's `HttpProxy<ClearGateProxy>`
-/// which handles connection pooling, keep-alive, H2, and all HTTP semantics.
 pub struct ClearGateService {
     pub config: Arc<ClearGateConfig>,
     pub pool: Arc<Pool>,
     pub ca: Arc<CertAuthority>,
     pub cert_cache: Arc<CertCache>,
     pub log_tx: LogSender,
-    /// Internal Pingora HTTP proxy for non-CONNECT requests.
     pub http_proxy: Arc<HttpProxy<ClearGateProxy>>,
     pub threat_engine: Option<Arc<ThreatEngine>>,
+    pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
+    pub conn_tracker: Option<Arc<crate::conn_limit::ConnectionTracker>>,
 }
 
 #[async_trait]
@@ -51,44 +48,86 @@ impl ServerApp for ClearGateService {
     ) -> Option<Stream> {
         ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
         TOTAL_REQUESTS.fetch_add(1, Ordering::Relaxed);
+        crate::metrics::inc_active_connections();
 
-        // Peek at the first bytes to detect CONNECT without consuming them.
-        // "CONNECT " is 8 bytes. If peek isn't supported, fall through to Pingora.
-        let mut peek_buf = [0u8; 8];
-        let is_connect = match stream.try_peek(&mut peek_buf).await {
-            Ok(true) => peek_buf.starts_with(b"CONNECT "),
-            _ => false,
+        // Connection limit check — extract client IP from socket digest.
+        // Stream is Box<dyn IO> which requires GetSocketDigest, so we can call it directly.
+        let client_ip = stream.get_socket_digest()
+            .and_then(|d| d.peer_addr().map(|a| a.to_string()))
+            .unwrap_or_default();
+
+        // The connection guard MUST live until process_new returns — its Drop decrements
+        // the per-IP counter. The `_conn_guard` binding keeps it alive for the entire scope.
+        let _conn_guard = if let Some(ref tracker) = self.conn_tracker {
+            let ip_only = crate::proxy::extract_ip_from_addr(&client_ip).to_string();
+            match tracker.try_acquire(&ip_only) {
+                Ok(guard) => Some(guard),
+                Err(_count) => {
+                    warn!(client_ip = %client_ip, "Connection rejected: limit exceeded");
+                    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                    crate::metrics::dec_active_connections();
+                    return None;
+                }
+            }
+        } else {
+            None
         };
 
+        // Peek at the first bytes to detect CONNECT or H2 preface
+        let mut peek_buf = [0u8; 24]; // "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" is 24 bytes
+        let is_connect;
+        let is_h2_preface;
+        match stream.try_peek(&mut peek_buf).await {
+            Ok(true) => {
+                is_connect = peek_buf[..8].starts_with(b"CONNECT ");
+                // H2 connection preface starts with "PRI * HT"
+                is_h2_preface = peek_buf[..8].starts_with(b"PRI * HT");
+            }
+            _ => {
+                is_connect = false;
+                is_h2_preface = false;
+            }
+        };
+
+        // H2C: if downstream speaks cleartext HTTP/2 and h2c is enabled, let Pingora handle it
+        if is_h2_preface {
+            let h2c_enabled = self.config.downstream.as_ref().map(|d| d.h2c).unwrap_or(false);
+            if h2c_enabled {
+                debug!("H2C connection detected, delegating to Pingora");
+                let result = self.http_proxy.process_new(stream, shutdown).await;
+                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                crate::metrics::dec_active_connections();
+                return result;
+            }
+        }
+
         if is_connect {
-            // Read the full request ourselves for CONNECT handling
             let mut session = ServerSession::new_http1(stream);
-            session.set_keepalive(None); // CONNECT tunnels aren't reusable
+            session.set_keepalive(None);
 
             match session.read_request().await {
                 Ok(true) => {}
                 _ => {
                     ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                    crate::metrics::dec_active_connections();
                     return None;
                 }
             }
 
             let result = self.handle_connect(session, shutdown).await;
             ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+            crate::metrics::dec_active_connections();
             return result;
         }
 
-        // Plain HTTP: delegate the untouched stream to Pingora's HttpProxy.
-        // Pingora will read the request, handle upstream, pooling, keep-alive, etc.
         let result = self.http_proxy.process_new(stream, shutdown).await;
         ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+        crate::metrics::dec_active_connections();
         result
     }
 }
 
 impl ClearGateService {
-    /// Handle a CONNECT request by responding 200, extracting the stream,
-    /// and piping bytes bidirectionally to the upstream.
     async fn handle_connect(
         self: &Arc<Self>,
         mut session: ServerSession,
@@ -103,7 +142,7 @@ impl ClearGateService {
 
         debug!(host = %host, port, "CONNECT request");
 
-        // Auth check for CONNECT — parse and validate Proxy-Authorization
+        // Auth check
         let mut username: Option<String> = None;
         let mut auth_method: Option<AuthMethod> = None;
         if let Some(auth_header) = session.req_header().headers.get("Proxy-Authorization") {
@@ -127,23 +166,36 @@ impl ClearGateService {
             return None;
         }
 
-        // Check policy before establishing tunnel
+        // Rate limiting for CONNECT
+        if let Some(ref limiter) = self.rate_limiter {
+            let ip_only = crate::proxy::extract_ip_from_addr(&client_ip);
+            if let Err(_kind) = limiter.check_rate(
+                ip_only,
+                username.as_deref(),
+                &host,
+            ) {
+                crate::metrics::record_rate_limit();
+                info!(host = %host, client_ip = %client_ip, "CONNECT rate limited");
+                let mut resp = ResponseHeader::build(429, Some(1)).unwrap();
+                resp.insert_header("Retry-After", &limiter.window_secs().to_string()).ok();
+                let _ = session.write_response_header(Box::new(resp)).await;
+                return None;
+            }
+        }
+
+        // Policy + threat evaluation
         let category = policy::categories::lookup_category(&self.pool, &host).await;
 
-        // Threat detection: heuristics (deterministic) + reputation check (learned)
         let mut threat_blocked = false;
         let mut rep_blocked = false;
         let mut threat_verdict: Option<conduit_common::types::ThreatVerdict> = None;
         if let Some(ref engine) = self.threat_engine {
-            // 1. Deterministic heuristic scoring
             let verdict = crate::threat::evaluate_request(
                 engine, &host, port, "/", "https",
                 category.as_deref(), None, None, None,
             );
             threat_blocked = verdict.blocked;
 
-            // 2. Reputation check — only at CONNECT boundary.
-            //    If Tier 2 content analysis previously flagged this domain, block it.
             if !threat_blocked {
                 if let Some(rep_score) = crate::threat::check_reputation(engine, &host) {
                     threat_blocked = true;
@@ -192,7 +244,6 @@ impl ClearGateService {
             info!(host = %host, category = ?category, "Blocking CONNECT");
 
             if self.config.tls_intercept {
-                // MITM block: accept CONNECT, do TLS handshake, serve block page
                 let resp = ResponseHeader::build(200, Some(0)).unwrap();
                 if session.write_response_header(Box::new(resp)).await.is_err() {
                     return None;
@@ -216,7 +267,6 @@ impl ClearGateService {
                 )
                 .await;
             } else {
-                // No MITM — bare 403 is all we can do
                 let resp = ResponseHeader::build(403, Some(1)).unwrap();
                 let _ = session.write_response_header(Box::new(resp)).await;
             }
@@ -257,6 +307,7 @@ impl ClearGateService {
                 block_reason: Some(block_reason),
                 rule_name: matched_rule_name,
                 threat_signals,
+                dlp_matches: None,
             };
             self.log_tx.send(entry);
 
@@ -272,13 +323,11 @@ impl ClearGateService {
             return None;
         }
 
-        // Get the underlying raw stream for bidirectional piping
         let raw_stream = match session.finish().await {
             Ok(Some(s)) => s,
             _ => return None,
         };
 
-        // Run tunnel inline — MITM or passthrough depending on config
         let threat_score = threat_verdict.as_ref().map(|v| v.score);
         let threat_tier = threat_verdict.as_ref().map(|v| v.tier_reached);
 
@@ -303,7 +352,7 @@ impl ClearGateService {
         )
         .await;
 
-        None // Connection is consumed by the tunnel
+        None
     }
 }
 
@@ -372,4 +421,3 @@ h1{color:#fafafa}
         .replace("{{CATEGORY}}", &html_escape(category))
         .replace("{{REASON}}", &html_escape(reason))
 }
-
