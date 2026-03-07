@@ -1,5 +1,6 @@
 # Build
 /target/
+docs/book/
 
 # Environment / secrets
 .env

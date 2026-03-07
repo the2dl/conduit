@@ -35,8 +35,8 @@ pub struct RequestContext {
     pub cache_enabled: bool,
     /// Cache status string (hit, miss, expired, etc.).
     pub cache_status: Option<String>,
-    /// MITM stream ID for tunnel pattern tracking and tunnel kill.
-    pub mitm_stream_id: Option<i32>,
+    /// MITM client address for tunnel pattern tracking and tunnel kill.
+    pub mitm_client_addr: Option<String>,
     /// Upstream TLS certificate metadata (captured in connected_to_upstream).
     pub cert_meta: Option<CertMeta>,
     /// Upstream response security headers (captured in response_filter).
@@ -78,7 +78,7 @@ impl RequestContext {
             response_location: None,
             cache_enabled: false,
             cache_status: None,
-            mitm_stream_id: None,
+            mitm_client_addr: None,
             cert_meta: None,
             security_headers: None,
             request_body_accumulated: 0,

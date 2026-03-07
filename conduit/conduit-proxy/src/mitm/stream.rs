@@ -23,9 +23,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use conduit_common::types::AuthMethod;
 
-/// Global counter for unique MitmStream IDs.
-/// Starts at 1_000_000 to avoid collisions with real file descriptors (typically < 65535).
-/// Constrained to i32 by Pingora's UniqueIDType / SocketDigest::raw_fd().
+/// Global counter for unique MitmStream IDs (used for Pingora's UniqueID trait).
+/// Starts at 1_000_000 to avoid collisions with real file descriptors.
+/// Constrained to i32 by Pingora's UniqueIDType.
 /// Wraps back to 1_000_000 when approaching i32::MAX to stay in the safe range.
 static NEXT_MITM_ID: AtomicI32 = AtomicI32::new(1_000_000);
 
@@ -36,7 +36,9 @@ const MITM_ID_MAX: i32 = i32::MAX - 1;
 /// Uses DashMap for lock-free concurrent reads in the hot path (request_filter)
 /// while allowing concurrent writes from response_body_filter without blocking
 /// other MITM connections.
-pub static MITM_CONTEXTS: LazyLock<DashMap<i32, MitmContext>> =
+/// Keyed by client socket address string (e.g. "192.168.1.1:54321") which is
+/// unique per TCP connection.
+pub static MITM_CONTEXTS: LazyLock<DashMap<String, MitmContext>> =
     LazyLock::new(DashMap::new);
 
 /// Metadata captured at CONNECT time, consumed by request_filter.
@@ -130,14 +132,14 @@ impl TunnelPatterns {
     }
 }
 
-/// Register a MITM context for the given stream ID.
-pub fn register_context(id: i32, ctx: MitmContext) {
-    MITM_CONTEXTS.insert(id, ctx);
+/// Register a MITM context for the given client address.
+pub fn register_context(client_addr: String, ctx: MitmContext) {
+    MITM_CONTEXTS.insert(client_addr, ctx);
 }
 
 /// Remove a MITM context after process_new returns.
-pub fn remove_context(id: i32) {
-    MITM_CONTEXTS.remove(&id);
+pub fn remove_context(client_addr: &str) {
+    MITM_CONTEXTS.remove(client_addr);
 }
 
 /// Wraps a decrypted client-side TLS stream to implement Pingora's IO trait.
@@ -164,9 +166,8 @@ impl MitmStream {
             );
         };
 
-        // Build a SocketDigest with peer_addr pre-populated.
-        // Store the MITM ID as the raw_fd so request_filter can retrieve it
-        // via SocketDigest::raw_fd() to look up the MitmContext.
+        // Build a SocketDigest with peer_addr pre-populated so that
+        // session.client_addr() works correctly in the proxy pipeline.
         let digest = SocketDigest::from_raw_fd(id);
         if let Some(addr) = peer_addr {
             let _ = digest.peer_addr.set(Some(SocketAddr::Inet(addr)));
@@ -178,10 +179,6 @@ impl MitmStream {
             peer_addr,
             socket_digest: Arc::new(digest),
         }
-    }
-
-    pub fn id(&self) -> i32 {
-        self.id
     }
 }
 

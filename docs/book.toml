@@ -1,0 +1,11 @@
+[book]
+authors = ["Conduit contributors"]
+language = "en"
+src = "src"
+title = "Conduit Proxy Documentation"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/the2dl/conduit"
+edit-url-template = "https://github.com/the2dl/conduit/edit/main/docs/{path}"

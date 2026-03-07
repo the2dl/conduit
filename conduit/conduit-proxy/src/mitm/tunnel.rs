@@ -265,11 +265,11 @@ async fn handle_mitm(
 
     // Wrap in MitmStream (implements Pingora's IO trait)
     let mitm = MitmStream::new(downstream_tls, peer_addr);
-    let stream_id = mitm.id();
+    let client_addr = client_ip.to_string();
 
-    // Register context for request_filter to pick up
-    mitm_stream::register_context(stream_id, MitmContext {
-        client_ip: client_ip.to_string(),
+    // Register context for request_filter to pick up (keyed by client socket address)
+    mitm_stream::register_context(client_addr.clone(), MitmContext {
+        client_ip: client_addr.clone(),
         port,
         username,
         auth_method,
@@ -283,7 +283,7 @@ async fn handle_mitm(
     let _ = http_proxy.process_new(stream, &shutdown).await;
 
     // Clean up context
-    mitm_stream::remove_context(stream_id);
+    mitm_stream::remove_context(&client_addr);
 
     debug!(host = %host, "MITM tunnel closed");
 }

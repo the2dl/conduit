@@ -253,18 +253,15 @@ impl ProxyHttp for ClearGateProxy {
         }
 
         // Check if this is a MITM-intercepted connection by looking up the
-        // stream's unique ID in the MITM context map. The ID is stored as the
-        // raw_fd in the SocketDigest at MitmStream construction time.
-        // COUPLING: Relies on MitmStream::new() storing the synthetic ID
-        // via SocketDigest::from_raw_fd(). See mitm/stream.rs.
-        let mitm_stream_id = session
+        // client address in the MITM context map. The key is the client's
+        // socket address string (ip:port), set during handle_connect.
+        let mitm_client_addr = session
             .downstream_session
-            .digest()
-            .and_then(|d| d.socket_digest.as_ref())
-            .map(|sd| sd.raw_fd());
+            .client_addr()
+            .map(|a| a.to_string());
 
-        let mitm_ctx = mitm_stream_id.and_then(|fd| {
-            crate::mitm::stream::MITM_CONTEXTS.get(&fd).map(|mc| {
+        let mitm_ctx = mitm_client_addr.as_ref().and_then(|addr| {
+            crate::mitm::stream::MITM_CONTEXTS.get(addr).map(|mc| {
                 (
                     mc.client_ip.clone(),
                     mc.port,
@@ -279,10 +276,10 @@ impl ProxyHttp for ClearGateProxy {
         if let Some((mitm_client_ip, mitm_port, mitm_username, mitm_auth_method, mitm_category, tunnel_killed)) =
             mitm_ctx
         {
-            ctx.client_ip = mitm_client_ip;
+            ctx.client_ip = extract_ip_from_addr(&mitm_client_ip).to_string();
             ctx.tls_intercepted = true;
             ctx.scheme = "https".into();
-            ctx.mitm_stream_id = mitm_stream_id;
+            ctx.mitm_client_addr = mitm_client_addr;
             ctx.is_connect = false;
 
             if tunnel_killed {
@@ -482,8 +479,6 @@ impl ProxyHttp for ClearGateProxy {
         _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
-
         let tls = ctx.scheme == "https" || ctx.is_connect;
 
         // Check load balancer first
@@ -491,8 +486,8 @@ impl ProxyHttp for ClearGateProxy {
         if let Some(ref router) = self.upstream_router {
             if let Some((addr, _group_name)) = router.find_upstream(&ctx.host) {
                 tracing::debug!(addr = %addr, group = %_group_name, "LB selected in upstream_peer");
-                let mut peer = HttpPeer::new_from_sockaddr(
-                    PSocketAddr::Inet(addr),
+                let mut peer = HttpPeer::new(
+                    addr,
                     tls,
                     ctx.host.clone(),
                 );
@@ -537,8 +532,8 @@ impl ProxyHttp for ClearGateProxy {
             )));
         }
 
-        let mut peer = HttpPeer::new_from_sockaddr(
-            PSocketAddr::Inet(sock_addr),
+        let mut peer = HttpPeer::new(
+            sock_addr,
             tls,
             ctx.host.clone(),
         );
@@ -844,9 +839,9 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
-        if let Some(stream_id) = ctx.mitm_stream_id {
+        if let Some(ref client_addr) = ctx.mitm_client_addr {
             let ct = ctx.response_content_type.as_deref();
-            if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(&stream_id) {
+            if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr) {
                 mc.tunnel_patterns.observe_request(&ctx.path, ct);
             }
         }
@@ -905,8 +900,8 @@ impl ProxyHttp for ClearGateProxy {
                                 }
 
                                 if !is_trusted && verdict.score >= engine.config.tier0_block_threshold {
-                                    if let Some(stream_id) = ctx.mitm_stream_id {
-                                        if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(&stream_id) {
+                                    if let Some(ref client_addr) = ctx.mitm_client_addr {
+                                        if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr) {
                                             mc.tunnel_killed = true;
                                         }
                                     }
@@ -917,8 +912,8 @@ impl ProxyHttp for ClearGateProxy {
                 }
             }
 
-            if let Some(stream_id) = ctx.mitm_stream_id {
-                let tunnel_eval = crate::mitm::stream::MITM_CONTEXTS.get_mut(&stream_id)
+            if let Some(ref client_addr) = ctx.mitm_client_addr {
+                let tunnel_eval = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr)
                     .and_then(|mut mc| {
                         if mc.tunnel_patterns.t2_fired {
                             return None;
