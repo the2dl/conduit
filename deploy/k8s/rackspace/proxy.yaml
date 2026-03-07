@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: conduit-proxy
+  namespace: conduit-stress
+spec:
+  selector:
+    app: conduit-proxy
+  ports:
+    - name: proxy
+      port: 8888
+      targetPort: 8888
+    - name: api
+      port: 8443
+      targetPort: 8443
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conduit-proxy
+  namespace: conduit-stress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conduit-proxy
+  template:
+    metadata:
+      labels:
+        app: conduit-proxy
+    spec:
+      nodeSelector:
+        conduit-role: proxy
+      containers:
+        - name: proxy
+          image: danqsi/conduit:proxy-latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8888
+            - containerPort: 8443
+            - containerPort: 9091
+          env:
+            - name: CONDUIT_CONFIG
+              value: /etc/conduit/conduit.toml
+            - name: RUST_LOG
+              value: warn
+          volumeMounts:
+            - name: config
+              mountPath: /etc/conduit
+          resources:
+            requests:
+              cpu: "4"
+              memory: 4Gi
+            limits:
+              cpu: "6"
+              memory: 10Gi
+          securityContext:
+            capabilities:
+              add:
+                - NET_BIND_SERVICE
+          readinessProbe:
+            tcpSocket:
+              port: 8888
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8888
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: conduit-config

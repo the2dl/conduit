@@ -1,0 +1,130 @@
+# Docker Compose for running stress tests in containers.
+# This is useful for CI/CD pipelines and reproducible benchmarks.
+#
+# Usage:
+#   docker compose -f docker-compose.stress.yml up --build
+#   docker compose -f docker-compose.stress.yml run k6 --tier large
+#   docker compose -f docker-compose.stress.yml down -v
+
+services:
+  # Dragonfly — required by the proxy
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
+    ulimits:
+      memlock: -1
+    volumes:
+      - stress_dragonfly:/data
+    networks:
+      - stress
+
+  # Conduit proxy under test
+  proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: proxy
+    environment:
+      - CONDUIT_CONFIG=/etc/conduit/conduit.toml
+      - RUST_LOG=warn
+    volumes:
+      - ./conduit-stress.toml:/etc/conduit/conduit.toml:ro
+    ports:
+      - "8888:8888"
+      - "9091:9091"
+    depends_on:
+      - dragonfly
+    networks:
+      - stress
+    # Raise file descriptor limits for high concurrency
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 8G
+
+  # Conduit API (for seeding policies)
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      - CONDUIT_CONFIG=/etc/conduit/conduit.toml
+    volumes:
+      - ./conduit-stress.toml:/etc/conduit/conduit.toml:ro
+    ports:
+      - "8443:8443"
+    depends_on:
+      - dragonfly
+    networks:
+      - stress
+
+  # Mock upstream — high-throughput local target
+  mock-upstream:
+    image: node:22-slim
+    working_dir: /app
+    command: node mock-upstream.js
+    volumes:
+      - ./mock-upstream.js:/app/mock-upstream.js:ro
+    ports:
+      - "18080:18080"
+      - "18443:18443"
+    networks:
+      - stress
+
+  # k6 load generator
+  k6:
+    image: grafana/k6:latest
+    environment:
+      - PROXY_HOST=proxy
+      - PROXY_PORT=8888
+      - USE_MOCK=1
+      - MOCK_HOST=mock-upstream
+      - MOCK_HTTP_PORT=18080
+      - MOCK_HTTPS_PORT=18443
+      - TARGET_TIER=${STRESS_TIER:-small}
+      - K6_INSECURE_SKIP_TLS_VERIFY=true
+      - HTTP_PROXY=http://proxy:8888
+      - HTTPS_PROXY=http://proxy:8888
+    volumes:
+      - ./k6-proxy-test.js:/scripts/k6-proxy-test.js:ro
+      - ./results:/results
+    command: run --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" -e RESULTS_DIR=/results /scripts/k6-proxy-test.js
+    depends_on:
+      - proxy
+      - mock-upstream
+    networks:
+      - stress
+
+  # Grafana + Prometheus for live dashboards (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - stress
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - stress
+    profiles:
+      - monitoring
+
+networks:
+  stress:
+
+volumes:
+  stress_dragonfly:

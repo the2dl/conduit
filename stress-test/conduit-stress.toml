@@ -1,0 +1,126 @@
+# Conduit config for stress testing.
+# Mirrors production features (threat, cache, DLP, etc.) but with:
+#   - auth disabled (isolate proxy perf from auth overhead)
+#   - relaxed rate/connection limits (so we can actually hit high concurrency)
+#   - fail_closed = false (don't block if Redis hiccups under load)
+
+listen_addr = "0.0.0.0:8888"
+api_addr = "0.0.0.0:8443"
+
+# Use "redis://dragonfly:6379" when running in Docker, localhost:6380 for local dev
+dragonfly_url = "redis://127.0.0.1:6380"
+
+tls_intercept = true
+auth_required = false
+fail_closed = false
+
+cert_cache_size = 10000
+log_channel_size = 10000
+workers = 8
+redis_pool_size = 64
+log_retention = 10000
+
+# --- HTTP Response Cache ---
+[cache]
+enabled = true
+max_cache_size = 134217728      # 128MB
+max_file_size = 10485760        # 10MB per response
+lock_timeout_secs = 5
+stale_while_revalidate_secs = 60
+stale_if_error_secs = 300
+
+# --- Threat Detection ---
+[threat]
+enabled = true
+tier0_escalation_threshold = 0.3
+tier0_block_threshold = 0.9
+dga_entropy_threshold = 3.5
+tier1_enabled = true
+tier1_escalation_threshold = 0.5
+tier2_enabled = true
+tier2_escalation_threshold = 0.6
+max_inspect_bytes = 262144         # 256KB
+tier2_block_on_inspect = true
+tier3_enabled = false
+reputation_enabled = true
+reputation_decay_hours = 168
+reputation_block_threshold = 0.55
+bloom_capacity = 2000000
+bloom_fp_rate = 0.0001
+feed_refresh_interval_secs = 3600
+
+# --- Timeout Hardening ---
+[timeouts]
+connect_timeout_secs = 30
+total_connection_timeout_secs = 60
+read_timeout_secs = 120
+write_timeout_secs = 120
+idle_timeout_secs = 600
+request_timeout_secs = 0
+
+# --- Request Size Limits ---
+[request_limits]
+max_request_header_size = 8192
+max_request_body_size = 10485760
+
+# --- Graceful Shutdown ---
+[shutdown]
+grace_period_secs = 60
+graceful_shutdown_timeout_secs = 300
+upgrade_sock = "/tmp/conduit-stress-upgrade.sock"
+
+# --- Rate Limiting (relaxed for stress testing) ---
+[rate_limit]
+enabled = true
+window_secs = 60
+per_ip_limit = 100000
+per_user_limit = 0
+per_destination_limit = 0
+
+# --- Connection Limits (relaxed for stress testing) ---
+[connection_limits]
+enabled = true
+max_connections_per_ip = 100000
+
+# --- DNS Cache ---
+[dns]
+enabled = true
+max_entries = 50000
+min_ttl_secs = 60
+max_ttl_secs = 3600
+negative_ttl_secs = 60
+
+# --- Prometheus Metrics ---
+[metrics]
+enabled = true
+listen_addr = "0.0.0.0:9091"
+
+# --- DLP ---
+[dlp]
+enabled = true
+max_scan_size = 1048576
+action = "block"
+
+# --- Load Balancing ---
+# Route mock upstream traffic through LB to bypass SSRF protection on loopback
+[load_balancing]
+enabled = true
+[[load_balancing.upstreams]]
+name = "mock-http"
+domains = ["mock.stress.local"]
+algorithm = "round_robin"
+[[load_balancing.upstreams.backends]]
+addr = "127.0.0.1:18080"
+weight = 1
+
+[[load_balancing.upstreams]]
+name = "mock-https"
+domains = ["mock-tls.stress.local"]
+algorithm = "round_robin"
+[[load_balancing.upstreams.backends]]
+addr = "127.0.0.1:18443"
+weight = 1
+
+# --- HTTP/2 Downstream ---
+[downstream]
+h2c = true

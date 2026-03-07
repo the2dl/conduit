@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-dragonfly
+  namespace: conduit-stress
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: seed-dragonfly
+    spec:
+      nodeSelector:
+        conduit-role: proxy
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              API="http://conduit-api:8443/api/v1"
+              CURL="curl -s --fail-with-body"
+
+              echo "=== Waiting for API to be ready ==="
+              for i in $(seq 1 30); do
+                if $CURL "$API/health" > /dev/null 2>&1; then
+                  echo "API is ready"
+                  break
+                fi
+                echo "  Waiting... ($i/30)"
+                sleep 2
+              done
+
+              echo ""
+              echo "=== Registering threat feeds ==="
+
+              register_feed() {
+                local name="$1" url="$2" type="$3" refresh="${4:-3600}"
+                echo -n "  $name ... "
+                $CURL "$API/threat/feeds" \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"name\":\"$name\",\"url\":\"$url\",\"feed_type\":\"$type\",\"refresh_interval_secs\":$refresh}" \
+                  -o /dev/null 2>/dev/null && echo "ok" || echo "FAILED (may already exist)"
+              }
+
+              register_feed "URLhaus" \
+                "https://urlhaus.abuse.ch/downloads/text_recent/" \
+                "url_blocklist"
+
+              register_feed "OpenPhish" \
+                "https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt" \
+                "url_blocklist"
+
+              register_feed "ThreatFox" \
+                "https://threatfox.abuse.ch/downloads/hostfile/" \
+                "domain_blocklist"
+
+              register_feed "Hagezi TIF" \
+                "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/tif.txt" \
+                "domain_blocklist"
+
+              register_feed "NRD 30-day" \
+                "https://raw.githubusercontent.com/cenk/nrd/refs/heads/main/nrd-last-10-days.txt" \
+                "nrd_list" \
+                86400
+
+              echo ""
+              echo "=== Triggering feed refresh ==="
+              $CURL -X POST "$API/threat/feeds/refresh" -o /dev/null 2>/dev/null && \
+                echo "  Feed refresh triggered" || echo "  FAILED"
+
+              echo ""
+              echo "=== Seed complete ==="

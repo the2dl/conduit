@@ -1,0 +1,13 @@
+# Build the conduit-mock binary
+FROM rust:1.93-bookworm AS builder
+RUN apt-get update && apt-get install -y cmake libclang-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p conduit-mock
+
+# Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/conduit-mock /usr/local/bin/conduit-mock
+EXPOSE 18080 18443
+CMD ["conduit-mock"]

@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dragonfly
+  namespace: conduit-stress
+spec:
+  selector:
+    app: dragonfly
+  ports:
+    - port: 6379
+      targetPort: 6379
+  clusterIP: None  # headless for direct pod access
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dragonfly
+  namespace: conduit-stress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dragonfly
+  template:
+    metadata:
+      labels:
+        app: dragonfly
+    spec:
+      nodeSelector:
+        conduit-role: proxy
+      containers:
+        - name: dragonfly
+          image: docker.dragonflydb.io/dragonflydb/dragonfly
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          args:
+            - "--maxmemory"
+            - "3gb"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

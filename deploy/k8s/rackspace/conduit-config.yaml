@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conduit-config
+  namespace: conduit-stress
+data:
+  conduit.toml: |
+    listen_addr = "0.0.0.0:8888"
+    api_addr = "0.0.0.0:8443"
+    dragonfly_url = "redis://dragonfly:6379"
+
+    tls_intercept = true
+    auth_required = false
+    fail_closed = false
+
+    cert_cache_size = 10000
+    log_channel_size = 10000
+    workers = 8
+    redis_pool_size = 64
+    log_retention = 10000
+
+    [cache]
+    enabled = true
+    max_cache_size = 134217728
+    max_file_size = 10485760
+    lock_timeout_secs = 5
+    stale_while_revalidate_secs = 60
+    stale_if_error_secs = 300
+
+    [threat]
+    enabled = true
+    tier0_escalation_threshold = 0.3
+    tier0_block_threshold = 0.9
+    dga_entropy_threshold = 3.5
+    tier1_enabled = true
+    tier1_escalation_threshold = 0.5
+    tier2_enabled = true
+    tier2_escalation_threshold = 0.6
+    max_inspect_bytes = 262144
+    tier2_block_on_inspect = true
+    tier3_enabled = false
+    reputation_enabled = true
+    reputation_decay_hours = 168
+    reputation_block_threshold = 0.55
+    bloom_capacity = 2000000
+    bloom_fp_rate = 0.0001
+    feed_refresh_interval_secs = 3600
+
+    [timeouts]
+    connect_timeout_secs = 30
+    total_connection_timeout_secs = 60
+    read_timeout_secs = 120
+    write_timeout_secs = 120
+    idle_timeout_secs = 600
+    request_timeout_secs = 0
+
+    [request_limits]
+    max_request_header_size = 8192
+    max_request_body_size = 10485760
+
+    [shutdown]
+    grace_period_secs = 60
+    graceful_shutdown_timeout_secs = 300
+    upgrade_sock = "/tmp/conduit-upgrade.sock"
+
+    [rate_limit]
+    enabled = true
+    window_secs = 60
+    per_ip_limit = 1000000
+    per_user_limit = 0
+    per_destination_limit = 0
+
+    [connection_limits]
+    enabled = true
+    max_connections_per_ip = 1000000
+
+    [dns]
+    enabled = true
+    max_entries = 50000
+    min_ttl_secs = 60
+    max_ttl_secs = 3600
+    negative_ttl_secs = 60
+
+    [metrics]
+    enabled = true
+    listen_addr = "0.0.0.0:9091"
+
+    [dlp]
+    enabled = true
+    max_scan_size = 1048576
+    action = "block"
+
+    # Route mock traffic through LB to bypass SSRF protection
+    [load_balancing]
+    enabled = true
+    [[load_balancing.upstreams]]
+    name = "mock-http"
+    domains = ["mock.stress.local"]
+    algorithm = "round_robin"
+    [[load_balancing.upstreams.backends]]
+    addr = "mock-upstream:18080"
+    weight = 1
+
+    [[load_balancing.upstreams]]
+    name = "mock-https"
+    domains = ["mock-tls.stress.local"]
+    algorithm = "round_robin"
+    [[load_balancing.upstreams.backends]]
+    addr = "mock-upstream:18443"
+    weight = 1
+
+    [downstream]
+    h2c = true
