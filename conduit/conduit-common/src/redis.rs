@@ -42,6 +42,9 @@ pub mod keys {
     /// All policy rules (sorted set, score = priority)
     pub const POLICIES: &str = "cleargate:policies";
 
+    /// DLP rules (hash, field = rule id, value = JSON)
+    pub const DLP_RULES: &str = "cleargate:dlp:rules";
+
     /// Log list (newest first)
     pub const LOGS: &str = "cleargate:logs";
 

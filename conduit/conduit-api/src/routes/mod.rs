@@ -1,6 +1,7 @@
 pub mod ca;
 pub mod categories;
 pub mod config;
+pub mod dlp;
 pub mod health;
 pub mod import;
 pub mod logs;
@@ -154,6 +155,7 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .merge(logs::routes())
         .merge(categories::routes())
         .merge(policies::routes())
+        .merge(dlp::routes())
         .merge(config::routes())
         .merge(import::routes())
         .merge(nodes::routes())

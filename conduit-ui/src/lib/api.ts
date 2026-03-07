@@ -115,6 +115,15 @@ export interface NodeEnrollment {
 	hmac_key: string;
 }
 
+export interface DlpRule {
+	id: string;
+	name: string;
+	regex: string;
+	action: 'log' | 'block' | 'redact';
+	enabled: boolean;
+	builtin: boolean;
+}
+
 export const api = {
 	health: () => request<Health>('/health'),
 	stats: () => request<Stats>('/stats'),
@@ -143,6 +152,15 @@ export const api = {
 			request<void>('/policies', { method: 'PUT', body: JSON.stringify(rule) }),
 		remove: (id: string) =>
 			request<void>('/policies', { method: 'DELETE', body: JSON.stringify({ id }) })
+	},
+	dlp: {
+		list: () => request<DlpRule[]>('/dlp/rules'),
+		create: (rule: Omit<DlpRule, 'id' | 'builtin'>) =>
+			request<DlpRule>('/dlp/rules', { method: 'POST', body: JSON.stringify(rule) }),
+		update: (rule: DlpRule) =>
+			request<DlpRule>('/dlp/rules', { method: 'PUT', body: JSON.stringify(rule) }),
+		remove: (id: string) =>
+			request<void>('/dlp/rules', { method: 'DELETE', body: JSON.stringify({ id }) })
 	},
 	config: {
 		get: () => request<Record<string, string>>('/config'),

@@ -316,6 +316,35 @@ impl std::fmt::Debug for NodeEnrollment {
     }
 }
 
+/// Action to take when a DLP rule matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DlpRuleAction {
+    Log,
+    Block,
+    Redact,
+}
+
+impl Default for DlpRuleAction {
+    fn default() -> Self { Self::Log }
+}
+
+/// A DLP rule stored in Dragonfly and managed via the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DlpRule {
+    pub id: String,
+    pub name: String,
+    pub regex: String,
+    #[serde(default)]
+    pub action: DlpRuleAction,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether this is a built-in rule (cannot be deleted via API).
+    #[serde(default)]
+    pub builtin: bool,
+}
+fn default_true() -> bool { true }
+
 /// Per-node stats breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeStats {

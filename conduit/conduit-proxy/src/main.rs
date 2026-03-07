@@ -208,10 +208,25 @@ fn main() -> anyhow::Result<()> {
         .filter(|c| c.enabled)
         .map(|c| Arc::new(load_balancer::UpstreamRouter::new(c)));
 
-    // Initialize DLP engine
+    // Initialize DLP engine, then load rules from Dragonfly (falls back to config if unavailable)
     let dlp_engine = config.dlp.as_ref()
         .filter(|c| c.enabled)
-        .map(|c| Arc::new(dlp::DlpEngine::new(c)));
+        .map(|c| {
+            let engine = Arc::new(dlp::DlpEngine::new(c));
+            // Load rules from Dragonfly (overrides config-based rules if any exist)
+            {
+                let pool_check = pool.clone();
+                let engine_ref = engine.clone();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("DLP load runtime");
+                rt.block_on(engine_ref.reload_from_dragonfly(&pool_check));
+            }
+            // Register for background reloads via pub/sub
+            dlp::register_for_reload(engine.clone(), pool.clone());
+            engine
+        });
 
     // Initialize connection tracker
     let conn_tracker = config.connection_limits.as_ref()

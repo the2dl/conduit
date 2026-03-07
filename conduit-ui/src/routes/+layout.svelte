@@ -6,6 +6,7 @@
 	import ScrollText from '@lucide/svelte/icons/scroll-text';
 	import Layers from '@lucide/svelte/icons/layers';
 	import Shield from '@lucide/svelte/icons/shield';
+	import ScanEye from '@lucide/svelte/icons/scan-eye';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
@@ -17,6 +18,7 @@
 		{ href: '/logs', label: 'Logs', icon: ScrollText },
 		{ href: '/categories', label: 'Categories', icon: Layers },
 		{ href: '/policies', label: 'Policies', icon: Shield },
+		{ href: '/dlp', label: 'DLP', icon: ScanEye },
 		{ href: '/users', label: 'Users', icon: UsersIcon },
 		{ href: '/nodes', label: 'Nodes', icon: ServerIcon },
 		{ href: '/settings', label: 'Settings', icon: SettingsIcon }

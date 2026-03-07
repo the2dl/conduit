@@ -48,3 +48,4 @@ governor = { workspace = true }
 nonzero_lit = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http = { workspace = true }
+regex = { workspace = true }

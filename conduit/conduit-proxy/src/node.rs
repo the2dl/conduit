@@ -244,9 +244,10 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
         info!(node_id, channel = %channel, payload = %payload, "Reload signal received");
 
         if channel == keys::CONFIG_RELOAD_CHANNEL {
-            // Invalidate policy/category caches
+            // Invalidate all config-driven caches
             policy::rules::invalidate_cache();
             policy::categories::invalidate_cache();
+            crate::dlp::invalidate_cache();
         }
         // Threat feed reloads are handled by the feed refresh thread's own interval.
         // The pub/sub notification here is informational — the next feed refresh cycle

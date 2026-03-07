@@ -69,6 +69,7 @@ bcrypt = { workspace = true }
 bloomfilter = { workspace = true }
 ipnet = { workspace = true }
 regex = { workspace = true }
+arc-swap = { workspace = true }
 unicode-normalization = { workspace = true }
 reqwest = { workspace = true }
 flate2 = { workspace = true }

@@ -54,6 +54,9 @@ async fn main() -> anyhow::Result<()> {
             .await;
     }
 
+    // Seed built-in DLP rules (idempotent — only writes if missing)
+    routes::dlp::seed_builtins(&pool).await;
+
     // Per-IP rate limiter: 60 requests/second burst, sustained 20/s
     let quota = Quota::per_second(nonzero_lit::u32!(60))
         .allow_burst(nonzero_lit::u32!(60));
