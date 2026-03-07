@@ -18,6 +18,7 @@ pub mod llm;
 pub mod model;
 pub mod reputation;
 
+use arc_swap::ArcSwap;
 use bloomfilter::Bloom;
 use conduit_common::config::ThreatConfig;
 use conduit_common::types::{ThreatSignal, ThreatTier, ThreatVerdict};
@@ -32,8 +33,8 @@ use tracing::{debug, info};
 /// Central threat engine holding all shared state.
 pub struct ThreatEngine {
     pub config: ThreatConfig,
-    pub bloom: RwLock<Bloom<str>>,
-    pub nrd_bloom: RwLock<Bloom<str>>,
+    pub bloom: ArcSwap<Bloom<str>>,
+    pub nrd_bloom: ArcSwap<Bloom<str>>,
     pub reputation_cache: Mutex<LruCache<String, reputation::CachedReputation>>,
     pub bad_cidrs: RwLock<Vec<IpNet>>,
     pub llm_tx: Option<mpsc::Sender<llm::LlmRequest>>,
@@ -94,8 +95,8 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
 
     let engine = Arc::new(ThreatEngine {
         config: config.clone(),
-        bloom: RwLock::new(bloom_filter),
-        nrd_bloom: RwLock::new(nrd_bloom),
+        bloom: ArcSwap::new(Arc::new(bloom_filter)),
+        nrd_bloom: ArcSwap::new(Arc::new(nrd_bloom)),
         reputation_cache,
         bad_cidrs: RwLock::new(bad_cidrs),
         llm_tx,
@@ -140,18 +141,22 @@ pub fn evaluate_request(
 
     // Bloom filter: check domain and full URL
     let bloom_hit = {
-        let bloom = engine.bloom.read();
+        let bloom = engine.bloom.load();
         if bloom::contains(&bloom, host) {
             true
+        } else if path.is_empty() || path == "/" {
+            false
         } else {
-            let full_url = format!("{host}{path}");
+            let mut full_url = String::with_capacity(host.len() + path.len());
+            full_url.push_str(host);
+            full_url.push_str(path);
             bloom::contains(&bloom, &full_url)
         }
     };
 
     // NRD bloom filter: check if domain was recently registered
     let nrd_hit = {
-        let nrd = engine.nrd_bloom.read();
+        let nrd = engine.nrd_bloom.load();
         bloom::contains(&nrd, host)
     };
 

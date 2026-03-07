@@ -142,6 +142,10 @@ impl DlpEngine {
                     pattern_name: pattern.name.clone(),
                     action: pattern.action,
                 });
+                // Early exit: if this pattern blocks, no need to check remaining patterns
+                if pattern.action == DlpAction::Block {
+                    break;
+                }
             }
         }
         matches

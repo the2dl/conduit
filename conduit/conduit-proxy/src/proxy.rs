@@ -491,10 +491,15 @@ impl ProxyHttp for ClearGateProxy {
                     tls,
                     ctx.host.clone(),
                 );
+                // LB backends are operator-configured internal servers —
+                // skip TLS cert verification (they often use self-signed certs)
+                peer.options.verify_cert = false;
+                peer.options.verify_hostname = false;
                 peer.options.connection_timeout = Some(self.connect_timeout());
                 peer.options.total_connection_timeout = Some(self.total_connection_timeout());
                 peer.options.read_timeout = Some(self.read_timeout());
                 peer.options.write_timeout = Some(self.write_timeout());
+                peer.options.idle_timeout = Some(std::time::Duration::from_secs(60));
                 ctx.upstream_addr = Some(addr.to_string());
                 ctx.lb_routed = true;
                 return Ok(Box::new(peer));
@@ -541,6 +546,7 @@ impl ProxyHttp for ClearGateProxy {
         peer.options.total_connection_timeout = Some(self.total_connection_timeout());
         peer.options.read_timeout = Some(self.read_timeout());
         peer.options.write_timeout = Some(self.write_timeout());
+        peer.options.idle_timeout = Some(std::time::Duration::from_secs(60));
         Ok(Box::new(peer))
     }
 

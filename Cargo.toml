@@ -4,6 +4,7 @@ members = [
     "conduit/conduit-common",
     "conduit/conduit-proxy",
     "conduit/conduit-api",
+    "conduit/conduit-mock",
     # Pingora workspace members (path deps, never modified)
     "pingora/pingora",
     "pingora/pingora-core",

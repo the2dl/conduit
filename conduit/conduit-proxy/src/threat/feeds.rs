@@ -8,9 +8,18 @@ use conduit_common::types::{ThreatFeed, ThreatFeedType};
 use deadpool_redis::Pool;
 use redis::AsyncCommands;
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
 use super::ThreatEngine;
+
+/// Signal for immediate feed refresh (set by pub/sub handler).
+static FORCE_REFRESH: once_cell::sync::Lazy<Notify> = once_cell::sync::Lazy::new(Notify::new);
+
+/// Trigger an immediate feed refresh (called from pub/sub handler in node.rs).
+pub fn trigger_immediate_refresh() {
+    FORCE_REFRESH.notify_one();
+}
 
 /// Maximum feed response size (50MB). Prevents unbounded memory from malicious/broken feeds.
 const MAX_FEED_SIZE: usize = 50 * 1024 * 1024;
@@ -38,7 +47,12 @@ pub fn spawn_feed_refresh(engine: Arc<ThreatEngine>, pool: Arc<Pool>) {
                 interval.tick().await; // skip immediate tick (we already did initial load)
 
                 loop {
-                    interval.tick().await;
+                    tokio::select! {
+                        _ = interval.tick() => {},
+                        _ = FORCE_REFRESH.notified() => {
+                            info!("Immediate feed refresh triggered by pub/sub signal");
+                        }
+                    }
                     if let Err(e) = refresh_all_feeds(&engine, &pool).await {
                         error!("Feed refresh failed: {e}");
                     }
@@ -106,16 +120,11 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
         }
     }
 
-    // Atomic swap: replace bloom filter and CIDRs
-    // Persist bloom while holding the write lock to prevent TOCTOU race
-    {
-        let mut bloom_guard = engine.bloom.write();
-        *bloom_guard = new_bloom;
-        super::bloom::save_to_redis(pool, &bloom_guard, total_entries).await;
-    }
+    // Atomic swap: persist bloom to Redis first, then swap in-memory via ArcSwap
+    super::bloom::save_to_redis(pool, &new_bloom, total_entries).await;
+    engine.bloom.store(Arc::new(new_bloom));
     if nrd_entries > 0 {
-        let mut nrd_guard = engine.nrd_bloom.write();
-        *nrd_guard = new_nrd_bloom;
+        engine.nrd_bloom.store(Arc::new(new_nrd_bloom));
         info!(nrd_entries, "NRD bloom filter updated");
     }
     {

@@ -23,4 +23,6 @@ Conduit is a forward MITM (man-in-the-middle) proxy built on Cloudflare's [Pingo
 
 Clients configure Conduit as their HTTP proxy. Plain HTTP requests flow through directly. For HTTPS, clients send a `CONNECT` request; Conduit establishes a TLS tunnel with dynamic certificate generation, allowing it to inspect the decrypted traffic before forwarding to the upstream server.
 
-All policy rules, logs, and state are stored in Dragonfly for fast access and multi-node coordination.
+## Stateless by design
+
+The proxy itself is stateless — all durable state (policy rules, logs, domain categories, threat reputation, DLP rules, node registry) lives in Dragonfly. In-memory structures like the DNS cache, HTTP cache, cert cache, and rate limit counters are ephemeral and rebuild automatically on restart. This means you can kill, restart, or scale proxy instances freely without data loss.

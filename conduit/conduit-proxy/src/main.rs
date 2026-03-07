@@ -89,6 +89,15 @@ fn main() -> anyhow::Result<()> {
     let opt = Opt::parse_args();
     let mut server = Server::new(Some(opt))?;
 
+    // Set worker threads to number of available CPUs (Pingora defaults to 1)
+    if let Some(conf) = Arc::get_mut(&mut server.configuration) {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        conf.threads = threads;
+        info!(threads, "Configured Pingora worker threads");
+    }
+
     // Apply shutdown config to Pingora's server configuration before bootstrap
     if let Some(ref shutdown_cfg) = config.shutdown {
         if let Some(conf) = Arc::get_mut(&mut server.configuration) {
@@ -103,6 +112,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     server.bootstrap();
+
+    // Load full category dataset into memory and register pool for background reloads
+    {
+        let pool_clone = pool.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Category dataset load runtime");
+        rt.block_on(policy::categories::load_full_dataset(&pool_clone));
+        policy::categories::register_for_reload(pool.clone());
+    }
 
     // Initialize threat engine if configured (before logging pipeline so it can receive the Arc)
     let threat_engine = if config.threat.as_ref().map(|t| t.enabled).unwrap_or(false) {

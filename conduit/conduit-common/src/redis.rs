@@ -33,10 +33,13 @@ pub fn sanitize_key_component(s: &str) -> String {
 pub mod keys {
     use super::sanitize_key_component;
 
+    /// Key prefix for domain category lookups.
+    pub const DOMAIN_CATEGORY_PREFIX: &str = "cleargate:domain:";
+
     /// Domain category: GET cleargate:domain:{domain} → category
     pub fn domain_category(domain: &str) -> String {
         let safe = sanitize_key_component(domain);
-        format!("cleargate:domain:{safe}")
+        format!("{}{safe}", DOMAIN_CATEGORY_PREFIX)
     }
 
     /// All policy rules (sorted set, score = priority)

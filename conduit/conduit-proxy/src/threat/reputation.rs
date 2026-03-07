@@ -62,13 +62,14 @@ pub fn get_cached_score(
     cache: &Mutex<LruCache<String, CachedReputation>>,
     domain: &str,
 ) -> Option<f32> {
-    let mut guard = cache.lock();
-    if let Some(entry) = guard.get(domain) {
+    let guard = cache.lock();
+    // Use peek() instead of get() to avoid LRU reorder mutation under lock.
+    // LRU ordering doesn't matter here since the cache is rebuilt from Redis every 30s.
+    if let Some(entry) = guard.peek(domain) {
         if entry.inserted_at.elapsed() < CACHE_TTL {
             return Some(entry.score);
         }
-        // Expired — remove it
-        guard.pop(domain);
+        // Expired — let it be lazily evicted rather than popping under lock
     }
     None
 }

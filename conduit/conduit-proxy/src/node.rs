@@ -249,10 +249,9 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
             policy::categories::invalidate_cache();
             crate::dlp::invalidate_cache();
         }
-        // Threat feed reloads are handled by the feed refresh thread's own interval.
-        // The pub/sub notification here is informational — the next feed refresh cycle
-        // will pick up any changes. For immediate reload, the feed thread watches
-        // the same channel internally.
+        if channel == keys::THREAT_RELOAD_CHANNEL {
+            crate::threat::feeds::trigger_immediate_refresh();
+        }
     }
 }
 

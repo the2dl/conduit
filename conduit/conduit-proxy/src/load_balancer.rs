@@ -94,13 +94,30 @@ fn domain_matches(pattern: &str, host: &str) -> bool {
     }
 }
 
+fn resolve_backend_addr(addr: &str) -> anyhow::Result<String> {
+    // If it already parses as a SocketAddr (IP:port), return as-is.
+    if addr.parse::<std::net::SocketAddr>().is_ok() {
+        return Ok(addr.to_string());
+    }
+    // Otherwise treat as hostname:port and resolve via DNS.
+    use std::net::ToSocketAddrs;
+    let resolved = addr
+        .to_socket_addrs()
+        .map_err(|e| anyhow::anyhow!("DNS resolution failed for '{}': {e}", addr))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("DNS resolution returned no results for '{}'", addr))?;
+    info!(original = %addr, resolved = %resolved, "Resolved hostname backend to IP");
+    Ok(resolved.to_string())
+}
+
 fn build_lb(group: &conduit_common::config::UpstreamGroup) -> anyhow::Result<LoadBalancer<RoundRobin>> {
     use pingora_load_balancing::{Backend, Backends, discovery};
     use std::collections::BTreeSet;
 
     let mut backends = BTreeSet::new();
     for b in &group.backends {
-        let backend = Backend::new_with_weight(&b.addr, b.weight)
+        let resolved_addr = resolve_backend_addr(&b.addr)?;
+        let backend = Backend::new_with_weight(&resolved_addr, b.weight)
             .map_err(|e| anyhow::anyhow!("Invalid backend addr '{}': {e}", b.addr))?;
         backends.insert(backend);
     }
