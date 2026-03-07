@@ -89,13 +89,10 @@ fn main() -> anyhow::Result<()> {
     let opt = Opt::parse_args();
     let mut server = Server::new(Some(opt))?;
 
-    // Set worker threads to number of available CPUs (Pingora defaults to 1)
+    // Honor TOML workers config (defaults to available CPUs via num_cpus())
     if let Some(conf) = Arc::get_mut(&mut server.configuration) {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        conf.threads = threads;
-        info!(threads, "Configured Pingora worker threads");
+        conf.threads = config.workers;
+        info!(threads = config.workers, "Configured Pingora worker threads");
     }
 
     // Apply shutdown config to Pingora's server configuration before bootstrap

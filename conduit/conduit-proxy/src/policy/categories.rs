@@ -75,11 +75,10 @@ pub async fn lookup_category(pool: &Arc<Pool>, domain: &str) -> Option<String> {
             trace!(domain, cached = true, "Category lookup (full map hit)");
             return Some(cat.clone());
         }
-        // Wildcard fallback: strip subdomains
-        let mut parts: Vec<&str> = domain.split('.').collect();
-        while parts.len() > 2 {
-            parts.remove(0);
-            let parent = parts.join(".");
+        // Wildcard fallback: strip subdomains (iterate by index to avoid O(n²) shifting)
+        let parts: Vec<&str> = domain.split('.').collect();
+        for start in 1..parts.len().saturating_sub(1) {
+            let parent = parts[start..].join(".");
             if let Some(cat) = map.get(&parent) {
                 trace!(domain, parent = %parent, cached = true, "Category lookup (full map wildcard)");
                 return Some(cat.clone());
@@ -203,11 +202,10 @@ async fn lookup_category_redis(pool: &Arc<Pool>, domain: &str) -> Option<String>
         }
     }
 
-    // Wildcard fallback: strip subdomains
-    let mut parts: Vec<&str> = domain.split('.').collect();
-    while parts.len() > 2 {
-        parts.remove(0);
-        let parent = parts.join(".");
+    // Wildcard fallback: strip subdomains (iterate by index to avoid O(n²) shifting)
+    let parts: Vec<&str> = domain.split('.').collect();
+    for start in 1..parts.len().saturating_sub(1) {
+        let parent = parts[start..].join(".");
         let key = keys::domain_category(&parent);
         if let Ok(cat) = conn.get::<_, Option<String>>(&key).await {
             if cat.is_some() {
