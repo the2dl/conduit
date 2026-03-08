@@ -10,8 +10,6 @@ spec:
       labels:
         app: seed-dragonfly
     spec:
-      nodeSelector:
-        conduit-role: proxy
       restartPolicy: OnFailure
       containers:
         - name: seed

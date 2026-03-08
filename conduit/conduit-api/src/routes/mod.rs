@@ -147,7 +147,7 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
     // Public endpoints (no auth required)
     let public_api = Router::new()
         .merge(health::routes())
-        .merge(ca::routes());
+        .merge(ca::public_routes());
 
     // Protected endpoints (require API key when configured)
     let protected_api = Router::new()
@@ -160,6 +160,7 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .merge(import::routes())
         .merge(nodes::routes())
         .merge(threat::routes())
+        .merge(ca::protected_routes())
         .route_layer(middleware::from_fn(audit_log))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_auth));
 

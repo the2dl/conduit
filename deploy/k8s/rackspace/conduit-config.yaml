@@ -80,6 +80,7 @@ data:
     min_ttl_secs = 60
     max_ttl_secs = 3600
     negative_ttl_secs = 60
+    ip_version = "v4_preferred"
 
     [metrics]
     enabled = true

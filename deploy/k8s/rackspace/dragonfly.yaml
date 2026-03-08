@@ -26,8 +26,6 @@ spec:
       labels:
         app: dragonfly
     spec:
-      nodeSelector:
-        conduit-role: proxy
       containers:
         - name: dragonfly
           image: docker.dragonflydb.io/dragonflydb/dragonfly

@@ -19,6 +19,7 @@ mod service;
 mod stats;
 mod threat;
 
+use arc_swap::ArcSwap;
 use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
 use pingora_core::server::configuration::Opt;
@@ -26,7 +27,7 @@ use pingora_core::server::Server;
 use pingora_core::services::listening::Service as ListeningService;
 use pingora_proxy::http_proxy;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::logging::LogSender;
@@ -56,13 +57,6 @@ fn main() -> anyhow::Result<()> {
 
     info!(listen = %config.listen_addr, api = %config.api_addr, "Starting ClearGate");
 
-    // CA
-    let ca = CertAuthority::load_or_generate(&config.ca_cert_path(), &config.ca_key_path())?;
-    let ca = Arc::new(ca);
-
-    // Cert cache
-    let cert_cache = Arc::new(CertCache::new(config.cert_cache_size, ca.clone()));
-
     // Redis/Dragonfly pool — use node-specific URL when configured
     let dragonfly_url = config
         .node
@@ -84,6 +78,43 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
     }
+
+    // CA: Dragonfly → disk → generate in-memory (no disk files required)
+    let ca = {
+        let pool_ref = pool.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        match rt.block_on(conduit_common::ca::load_ca_from_dragonfly(&pool_ref)) {
+            Ok(ca) => {
+                info!("Loaded CA from Dragonfly");
+                ca
+            }
+            Err(_) => {
+                // Try disk if configured paths exist
+                let cert_path = config.ca_cert_path();
+                let key_path = config.ca_key_path();
+                let ca = if cert_path.exists() && key_path.exists() {
+                    info!("Loading CA from disk");
+                    CertAuthority::load_or_generate(&cert_path, &key_path)?
+                } else {
+                    info!("No CA in Dragonfly or on disk, generating new CA");
+                    CertAuthority::generate()?
+                };
+                if let Err(e) = rt.block_on(conduit_common::ca::store_ca_to_dragonfly(&pool_ref, &ca)) {
+                    warn!("Failed to persist CA to Dragonfly: {e}");
+                } else {
+                    info!("CA persisted to Dragonfly for multi-node sync");
+                }
+                ca
+            }
+        }
+    };
+    let ca = Arc::new(ArcSwap::from_pointee(ca));
+
+    // Cert cache (holds ArcSwap<CertAuthority> for hot-reload on rotation)
+    let cert_cache = Arc::new(CertCache::new(config.cert_cache_size, ca));
 
     // Bootstrap Pingora server
     let opt = Opt::parse_args();
@@ -133,6 +164,9 @@ fn main() -> anyhow::Result<()> {
 
     // Spawn node lifecycle (heartbeat, pub/sub) if configured
     node::spawn_node_lifecycle(&config, &pool);
+
+    // Register cert cache for CA hot-reload via pub/sub
+    mitm::cert_cache::register_for_reload(cert_cache.clone(), pool.clone());
 
     // Initialize Prometheus metrics server if configured
     if let Some(ref metrics_cfg) = config.metrics {
@@ -269,7 +303,6 @@ fn main() -> anyhow::Result<()> {
     let deps = ProxyDeps {
         config: config.clone(),
         pool: pool.clone(),
-        ca: ca.clone(),
         cert_cache: cert_cache.clone(),
         log_tx: log_tx.clone(),
         threat_engine: threat_engine.clone(),
@@ -286,7 +319,6 @@ fn main() -> anyhow::Result<()> {
     let cleargate = ClearGateService {
         config: config.clone(),
         pool,
-        ca,
         cert_cache,
         log_tx: LogSender(log_tx),
         http_proxy: pingora_proxy,

@@ -1,4 +1,5 @@
 use conduit_common::config::DnsConfig;
+use conduit_common::dns::IpVersion;
 use dashmap::DashSet;
 use lru::LruCache;
 use parking_lot::Mutex;
@@ -23,6 +24,7 @@ pub struct DnsCache {
     ttl: Duration,
     negative_ttl: Duration,
     enabled: bool,
+    ip_version: IpVersion,
 }
 
 impl DnsCache {
@@ -39,6 +41,7 @@ impl DnsCache {
             ttl,
             negative_ttl: Duration::from_secs(config.negative_ttl_secs),
             enabled: config.enabled,
+            ip_version: IpVersion::from_config(&config.ip_version),
         }
     }
 
@@ -116,7 +119,7 @@ impl DnsCache {
         }
     }
 
-    /// Resolve and return all addresses (for caching).
+    /// Resolve and return all addresses (for caching), filtered by ip_version config.
     async fn lookup_all(&self, host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
         let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
         if addrs.is_empty() {
@@ -125,20 +128,23 @@ impl DnsCache {
                 format!("No addresses found for {host}:{port}"),
             ));
         }
-        Ok(addrs)
+        Ok(self.ip_version.filter(addrs))
     }
 
-    /// Resolve and return just the first address (fallback for inflight coalescing).
+    /// Resolve and return just the best address (fallback for inflight coalescing).
     async fn lookup_first(&self, host: &str, port: u16) -> std::io::Result<SocketAddr> {
-        tokio::net::lookup_host((host, port))
-            .await?
-            .next()
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("No addresses found for {host}:{port}"),
-                )
-            })
+        let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+        self.ip_version.pick_first(&addrs).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No addresses found for {host}:{port}"),
+            )
+        })
+    }
+
+    /// Get the configured IP version policy (for use by other resolution paths).
+    pub fn ip_version(&self) -> IpVersion {
+        self.ip_version
     }
 }
 
@@ -153,6 +159,7 @@ mod tests {
             min_ttl_secs: 1,
             max_ttl_secs: 60,
             negative_ttl_secs: 1,
+            ip_version: "v4_preferred".into(),
         }
     }
 

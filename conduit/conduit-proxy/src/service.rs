@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
 use conduit_common::types::{AuthMethod, BlockReason, LogEntry, PolicyAction};
 use conduit_common::util::html_escape;
@@ -30,7 +29,6 @@ use crate::threat::ThreatEngine;
 pub struct ClearGateService {
     pub config: Arc<ClearGateConfig>,
     pub pool: Arc<Pool>,
-    pub ca: Arc<CertAuthority>,
     pub cert_cache: Arc<CertCache>,
     pub log_tx: LogSender,
     pub http_proxy: Arc<HttpProxy<ClearGateProxy>>,
@@ -261,7 +259,6 @@ impl ClearGateService {
                 tunnel::serve_block_page(
                     raw_stream,
                     &host,
-                    &self.ca,
                     &self.cert_cache,
                     &block_html,
                 )
@@ -335,7 +332,6 @@ impl ClearGateService {
             raw_stream,
             host,
             port,
-            self.ca.clone(),
             self.cert_cache.clone(),
             self.config.clone(),
             self.pool.clone(),

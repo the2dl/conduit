@@ -26,8 +26,6 @@ spec:
       labels:
         app: conduit-api
     spec:
-      nodeSelector:
-        conduit-role: proxy
       containers:
         - name: api
           image: danqsi/conduit:api-latest

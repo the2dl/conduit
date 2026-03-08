@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Conduit Stress Test — Kubernetes Deployment Script
+# Conduit Multi-Node Deployment Script
+#
+# Deploys N stateless proxy replicas behind a cloud LoadBalancer.
+# All pods schedule freely (no node selectors). Shared state lives in Dragonfly.
 #
 # Prerequisites:
-#   - kubectl configured for your Rackspace cluster
-#   - Docker images built and available (or use local registry)
-#   - Nodes labeled: conduit-role=proxy and conduit-role=loadgen
+#   - kubectl configured for your cluster
+#   - Docker images built and available
 #
 # Usage:
-#   ./deploy.sh setup              # Label nodes, apply tuning, deploy infra + seed
+#   ./deploy.sh setup              # Deploy infra + proxy (3 replicas) + seed
 #   ./deploy.sh build-push         # Build and push Docker images
 #   ./deploy.sh seed               # Re-run seed job (threat feeds, categories)
+#   ./deploy.sh scale N            # Scale proxy to N replicas
+#   ./deploy.sh lb-ip              # Get the external LoadBalancer IP
 #   ./deploy.sh run [TIER]         # Run a stress test (default: medium)
-#   ./deploy.sh logs               # Stream k6 job logs
+#   ./deploy.sh logs [proxy|k6]    # Stream logs
 #   ./deploy.sh results            # Fetch results from k6 pod
-#   ./deploy.sh metrics            # Curl proxy metrics
+#   ./deploy.sh metrics            # Curl proxy metrics (all pods)
 #   ./deploy.sh teardown           # Delete everything
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,21 +31,7 @@ shift || true
 
 case "$cmd" in
   setup)
-    echo "=== Setting up cluster ==="
-
-    # Get node names
-    NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
-    if [ ${#NODES[@]} -lt 2 ]; then
-      echo "Warning: Only ${#NODES[@]} node(s) found. Need 2 for proper isolation."
-      echo "Labeling single node with both roles."
-      kubectl label node "${NODES[0]}" conduit-role=proxy --overwrite
-      kubectl label node "${NODES[0]}" conduit-role=loadgen --overwrite
-    else
-      echo "Labeling ${NODES[0]} as proxy node"
-      kubectl label node "${NODES[0]}" conduit-role=proxy --overwrite
-      echo "Labeling ${NODES[1]} as loadgen node"
-      kubectl label node "${NODES[1]}" conduit-role=loadgen --overwrite
-    fi
+    echo "=== Deploying Conduit (multi-node) ==="
 
     # Create namespace
     kubectl apply -f "${SCRIPT_DIR}/namespace.yaml"
@@ -70,15 +60,15 @@ case "$cmd" in
     kubectl apply -f "${SCRIPT_DIR}/api.yaml"
     kubectl -n "$NAMESPACE" rollout status deployment/conduit-api --timeout=120s
 
-    # Deploy proxy
-    echo "Deploying conduit-proxy..."
+    # Deploy proxy (3 replicas behind LoadBalancer)
+    echo "Deploying conduit-proxy (3 replicas)..."
     kubectl apply -f "${SCRIPT_DIR}/proxy.yaml"
     kubectl -n "$NAMESPACE" rollout status deployment/conduit-proxy --timeout=120s
 
     # Deploy k6 scripts
     kubectl apply -f "${SCRIPT_DIR}/k6-configmap.yaml"
 
-    # Seed Dragonfly (threat feeds, etc.)
+    # Seed Dragonfly
     echo "Seeding Dragonfly..."
     kubectl -n "$NAMESPACE" delete job seed-dragonfly --ignore-not-found
     kubectl apply -f "${SCRIPT_DIR}/seed-job.yaml"
@@ -89,6 +79,19 @@ case "$cmd" in
     echo "=== Setup complete ==="
     echo ""
     kubectl -n "$NAMESPACE" get pods -o wide
+    echo ""
+    echo "Waiting for LoadBalancer IP..."
+    for i in $(seq 1 30); do
+      LB_IP=$(kubectl -n "$NAMESPACE" get svc conduit-proxy -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+      if [ -n "$LB_IP" ]; then
+        echo "LoadBalancer IP: $LB_IP"
+        echo "  Proxy:   http://${LB_IP}:8888"
+        echo "  API:     http://${LB_IP}:8443"
+        break
+      fi
+      sleep 2
+    done
+    [ -z "${LB_IP:-}" ] && echo "LB IP not assigned yet. Run: ./deploy.sh lb-ip"
     ;;
 
   seed)
@@ -110,31 +113,48 @@ case "$cmd" in
     echo "Building images..."
     cd "$REPO_ROOT"
 
-    # Build proxy
     docker build --target proxy -t "${REGISTRY}/conduit-proxy:latest" .
     docker push "${REGISTRY}/conduit-proxy:latest"
 
-    # Build API
     docker build --target api -t "${REGISTRY}/conduit-api:latest" .
     docker push "${REGISTRY}/conduit-api:latest"
 
-    # Build mock
     docker build -f deploy/k8s/rackspace/Dockerfile.mock -t "${REGISTRY}/conduit-mock:latest" .
     docker push "${REGISTRY}/conduit-mock:latest"
 
     echo "Images pushed to ${REGISTRY}"
 
-    # Update deployments to use registry images
     kubectl -n "$NAMESPACE" set image deployment/conduit-proxy proxy="${REGISTRY}/conduit-proxy:latest"
     kubectl -n "$NAMESPACE" set image deployment/conduit-api api="${REGISTRY}/conduit-api:latest"
     kubectl -n "$NAMESPACE" set image deployment/mock-upstream mock="${REGISTRY}/conduit-mock:latest"
+    ;;
+
+  scale)
+    REPLICAS="${1:?Usage: ./deploy.sh scale N}"
+    echo "Scaling conduit-proxy to ${REPLICAS} replicas..."
+    kubectl -n "$NAMESPACE" scale deployment/conduit-proxy --replicas="$REPLICAS"
+    kubectl -n "$NAMESPACE" rollout status deployment/conduit-proxy --timeout=120s
+    echo ""
+    kubectl -n "$NAMESPACE" get pods -l app=conduit-proxy -o wide
+    ;;
+
+  lb-ip)
+    LB_IP=$(kubectl -n "$NAMESPACE" get svc conduit-proxy -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    if [ -n "$LB_IP" ]; then
+      echo "LoadBalancer IP: $LB_IP"
+      echo "  Proxy:   http://${LB_IP}:8888"
+      echo "  API:     http://${LB_IP}:8443"
+      echo ""
+      echo "Test:  curl -x http://${LB_IP}:8888 http://example.com"
+    else
+      echo "No external IP assigned yet. Check: kubectl -n $NAMESPACE get svc conduit-proxy"
+    fi
     ;;
 
   run)
     TIER="${1:-medium}"
     JOB_NAME="k6-stress-${TIER}"
 
-    # Delete previous job if exists
     kubectl -n "$NAMESPACE" delete job "$JOB_NAME" --ignore-not-found
 
     echo "Starting stress test: tier=${TIER}"
@@ -147,8 +167,20 @@ case "$cmd" in
     ;;
 
   logs)
-    TIER="${1:-medium}"
-    kubectl -n "$NAMESPACE" logs -f "job/k6-stress-${TIER}"
+    TARGET="${1:-proxy}"
+    case "$TARGET" in
+      proxy)
+        echo "=== Logs from all proxy pods ==="
+        kubectl -n "$NAMESPACE" logs -l app=conduit-proxy --all-containers --prefix --tail=100 -f
+        ;;
+      k6)
+        TIER="${2:-medium}"
+        kubectl -n "$NAMESPACE" logs -f "job/k6-stress-${TIER}"
+        ;;
+      *)
+        kubectl -n "$NAMESPACE" logs -l "app=${TARGET}" --all-containers --prefix --tail=100 -f
+        ;;
+    esac
     ;;
 
   results)
@@ -162,8 +194,12 @@ case "$cmd" in
     ;;
 
   metrics)
-    kubectl -n "$NAMESPACE" exec deployment/conduit-proxy -- \
-      curl -s http://localhost:9091/metrics
+    echo "=== Metrics from all proxy pods ==="
+    for POD in $(kubectl -n "$NAMESPACE" get pods -l app=conduit-proxy -o jsonpath='{.items[*].metadata.name}'); do
+      echo "--- ${POD} ---"
+      kubectl -n "$NAMESPACE" exec "$POD" -- curl -s http://localhost:9091/metrics | grep -E '^(conduit_|# TYPE conduit_)' | head -30
+      echo ""
+    done
     ;;
 
   status)
@@ -176,17 +212,13 @@ case "$cmd" in
     echo "=== Jobs ==="
     kubectl -n "$NAMESPACE" get jobs
     echo ""
-    echo "=== Node Labels ==="
-    kubectl get nodes --show-labels | grep conduit-role || echo "No nodes labeled"
+    echo "=== Proxy Replicas ==="
+    kubectl -n "$NAMESPACE" get deployment conduit-proxy
     ;;
 
   teardown)
     echo "Tearing down conduit-stress namespace..."
     kubectl delete namespace "$NAMESPACE" --ignore-not-found
-    echo "Removing node labels..."
-    for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-      kubectl label node "$node" conduit-role- 2>/dev/null || true
-    done
     echo "Done."
     ;;
 
@@ -194,13 +226,15 @@ case "$cmd" in
     echo "Usage: ./deploy.sh <command> [args]"
     echo ""
     echo "Commands:"
-    echo "  setup              Label nodes, apply tuning, deploy all + seed"
+    echo "  setup              Deploy all components (3 proxy replicas behind LB)"
     echo "  build-push         Build and push Docker images (set REGISTRY env var)"
     echo "  seed               Re-run Dragonfly seed (threat feeds, categories)"
+    echo "  scale N            Scale proxy to N replicas"
+    echo "  lb-ip              Show the external LoadBalancer IP"
     echo "  run [TIER]         Run stress test (smoke|small|medium|large|enterprise)"
-    echo "  logs [TIER]        Stream k6 job logs"
+    echo "  logs [proxy|k6]    Stream logs from proxy pods or k6 job"
     echo "  results [TIER]     Copy results from k6 pod"
-    echo "  metrics            Fetch Prometheus metrics from proxy"
+    echo "  metrics            Fetch metrics from all proxy pods"
     echo "  status             Show all resources"
     echo "  teardown           Delete everything"
     ;;

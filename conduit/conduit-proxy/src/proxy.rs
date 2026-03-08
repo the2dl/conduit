@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
 use conduit_common::types::{BlockReason, LogEntry, PolicyAction};
 use deadpool_redis::Pool;
@@ -42,7 +41,6 @@ pub struct CacheComponents {
 pub struct ProxyDeps {
     pub config: Arc<ClearGateConfig>,
     pub pool: Arc<Pool>,
-    pub ca: Arc<CertAuthority>,
     pub cert_cache: Arc<CertCache>,
     pub log_tx: mpsc::Sender<LogEntry>,
     pub threat_engine: Option<Arc<ThreatEngine>>,
@@ -57,8 +55,6 @@ pub struct ProxyDeps {
 pub struct ClearGateProxy {
     pub config: Arc<ClearGateConfig>,
     pub pool: Arc<Pool>,
-    #[allow(dead_code)]
-    pub ca: Arc<CertAuthority>,
     #[allow(dead_code)]
     pub cert_cache: Arc<CertCache>,
     pub log_tx: LogSender,
@@ -81,7 +77,6 @@ impl ClearGateProxy {
         Self {
             config: deps.config,
             pool: deps.pool,
-            ca: deps.ca,
             cert_cache: deps.cert_cache,
             log_tx: LogSender(deps.log_tx),
             threat_engine: deps.threat_engine,
@@ -513,13 +508,18 @@ impl ProxyHttp for ClearGateProxy {
                     .more_context(format!("DNS resolution failed for {}:{} — {e}", ctx.host, ctx.port))
             })?
         } else {
-            tokio::net::lookup_host((ctx.host.as_str(), ctx.port))
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((ctx.host.as_str(), ctx.port))
                 .await
                 .map_err(|e| {
                     pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
                         .more_context(format!("DNS resolution failed for {}:{} — {e}", ctx.host, ctx.port))
                 })?
-                .next()
+                .collect();
+            // Apply ip_version filtering from dns config
+            let ip_ver = self.dns_cache.as_ref()
+                .map(|d| d.ip_version())
+                .unwrap_or(conduit_common::dns::IpVersion::V4Preferred);
+            ip_ver.pick_first(&addrs)
                 .ok_or_else(|| {
                     pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
                         .more_context(format!("No addresses found for {}:{}", ctx.host, ctx.port))

@@ -1,6 +1,6 @@
 use boring::ssl::{SslAcceptor, SslMethod};
-use conduit_common::ca::CertAuthority;
 use conduit_common::config::ClearGateConfig;
+use conduit_common::dns::IpVersion;
 use conduit_common::types::{AuthMethod, LogEntry, PolicyAction};
 use deadpool_redis::Pool;
 use pingora_boringssl::ext;
@@ -40,7 +40,6 @@ pub async fn handle_connect_tunnel(
     downstream: Stream,
     host: String,
     port: u16,
-    ca: Arc<CertAuthority>,
     cert_cache: Arc<CertCache>,
     config: Arc<ClearGateConfig>,
     _pool: Arc<Pool>,
@@ -58,7 +57,7 @@ pub async fn handle_connect_tunnel(
     if config.tls_intercept {
         // MITM: TLS accept on client side, then route through Pingora pipeline
         handle_mitm(
-            downstream, host, port, ca, cert_cache,
+            downstream, host, port, cert_cache,
             &client_ip, category, username, auth_method,
             http_proxy, shutdown,
         ).await;
@@ -67,9 +66,13 @@ pub async fn handle_connect_tunnel(
         let addr = format!("{host}:{port}");
         let start = chrono::Utc::now();
 
+        let ip_ver = config.dns.as_ref()
+            .map(|d| IpVersion::from_config(&d.ip_version))
+            .unwrap_or(IpVersion::V4Preferred);
+
         let resolved_addrs: Vec<std::net::SocketAddr> =
             match tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(&addr)).await {
-                Ok(Ok(addrs)) => addrs.collect(),
+                Ok(Ok(addrs)) => ip_ver.filter(addrs.collect()),
                 Ok(Err(e)) => {
                     warn!(addr = %addr, "DNS resolution failed: {e}");
                     return;
@@ -113,9 +116,10 @@ pub async fn handle_connect_tunnel(
 async fn mitm_accept(
     downstream: Stream,
     host: &str,
-    ca: &CertAuthority,
     cert_cache: &CertCache,
 ) -> Option<SslStream<Stream>> {
+    let ca = cert_cache.current_ca();
+
     let acceptor = match SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()) {
         Ok(builder) => builder.build(),
         Err(e) => {
@@ -180,13 +184,12 @@ async fn mitm_accept(
 pub async fn serve_block_page(
     downstream: Stream,
     host: &str,
-    ca: &CertAuthority,
     cert_cache: &CertCache,
     block_html: &str,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let Some(downstream_tls) = mitm_accept(downstream, host, ca, cert_cache).await else {
+    let Some(downstream_tls) = mitm_accept(downstream, host, cert_cache).await else {
         return;
     };
 
@@ -243,7 +246,6 @@ async fn handle_mitm(
     downstream: Stream,
     host: String,
     port: u16,
-    ca: Arc<CertAuthority>,
     cert_cache: Arc<CertCache>,
     client_ip: &str,
     category: Option<String>,
@@ -256,7 +258,7 @@ async fn handle_mitm(
     let peer_addr: Option<std::net::SocketAddr> = client_ip.parse().ok();
 
     // TLS accept on downstream (MITM)
-    let downstream_tls = match mitm_accept(downstream, &host, &ca, &cert_cache).await {
+    let downstream_tls = match mitm_accept(downstream, &host, &cert_cache).await {
         Some(s) => s,
         None => return,
     };

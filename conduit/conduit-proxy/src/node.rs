@@ -230,8 +230,11 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
         error!(node_id, "Failed to subscribe to threat reload channel: {e}");
         // Non-fatal — config reload still works
     }
+    if let Err(e) = pubsub.subscribe(keys::CA_RELOAD_CHANNEL).await {
+        error!(node_id, "Failed to subscribe to CA reload channel: {e}");
+    }
 
-    info!(node_id, "Subscribed to config + threat reload channels");
+    info!(node_id, "Subscribed to config + threat + CA reload channels");
 
     use tokio_stream::StreamExt;
     let mut msg_stream = pubsub.on_message();
@@ -251,6 +254,9 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
         }
         if channel == keys::THREAT_RELOAD_CHANNEL {
             crate::threat::feeds::trigger_immediate_refresh();
+        }
+        if channel == keys::CA_RELOAD_CHANNEL {
+            crate::mitm::cert_cache::reload_ca();
         }
     }
 }

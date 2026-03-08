@@ -29,8 +29,6 @@ spec:
       labels:
         app: mock-upstream
     spec:
-      nodeSelector:
-        conduit-role: proxy
       containers:
         - name: mock
           image: danqsi/conduit:mock-latest

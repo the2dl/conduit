@@ -18,8 +18,6 @@ spec:
       labels:
         app: k6-stress
     spec:
-      nodeSelector:
-        conduit-role: loadgen
       restartPolicy: Never
       containers:
         - name: k6
@@ -51,11 +49,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "6"
-              memory: 8Gi
+              cpu: "1"
+              memory: 1Gi
             limits:
-              cpu: "8"
-              memory: 14Gi
+              cpu: "2"
+              memory: 4Gi
       volumes:
         - name: scripts
           configMap:

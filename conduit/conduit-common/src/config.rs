@@ -400,7 +400,14 @@ pub struct DnsConfig {
     pub max_ttl_secs: u64,
     #[serde(default = "default_dns_negative_ttl")]
     pub negative_ttl_secs: u64,
+    /// IP version preference for upstream connections.
+    /// "any" = OS default, "v4_only" = IPv4 only, "v6_only" = IPv6 only,
+    /// "v4_preferred" = filter IPv6 when IPv4 available (default).
+    #[serde(default = "default_ip_version")]
+    pub ip_version: String,
 }
+
+fn default_ip_version() -> String { "v4_preferred".into() }
 
 fn default_dns_max_entries() -> usize { 10000 }
 fn default_dns_min_ttl() -> u64 { 30 }

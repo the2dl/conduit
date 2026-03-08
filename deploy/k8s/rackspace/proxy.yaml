@@ -1,9 +1,26 @@
+# Internal headless service for metrics scraping per-pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: conduit-proxy-headless
+  namespace: conduit-stress
+spec:
+  clusterIP: None
+  selector:
+    app: conduit-proxy
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+---
+# External LoadBalancer — this is what clients connect to
 apiVersion: v1
 kind: Service
 metadata:
   name: conduit-proxy
   namespace: conduit-stress
 spec:
+  type: LoadBalancer
   selector:
     app: conduit-proxy
   ports:
@@ -13,9 +30,8 @@ spec:
     - name: api
       port: 8443
       targetPort: 8443
-    - name: metrics
-      port: 9091
-      targetPort: 9091
+  # Cloud LB will health-check via readinessProbe on the pods
+  externalTrafficPolicy: Local  # preserve client IP for per-IP rate limiting
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -23,7 +39,7 @@ metadata:
   name: conduit-proxy
   namespace: conduit-stress
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: conduit-proxy
@@ -32,8 +48,13 @@ spec:
       labels:
         app: conduit-proxy
     spec:
-      nodeSelector:
-        conduit-role: proxy
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: conduit-proxy
       containers:
         - name: proxy
           image: danqsi/conduit:proxy-latest
@@ -47,16 +68,20 @@ spec:
               value: /etc/conduit/conduit.toml
             - name: RUST_LOG
               value: warn
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           volumeMounts:
             - name: config
               mountPath: /etc/conduit
           resources:
             requests:
-              cpu: "4"
-              memory: 4Gi
+              cpu: "2"
+              memory: 2Gi
             limits:
-              cpu: "6"
-              memory: 10Gi
+              cpu: "4"
+              memory: 8Gi
           securityContext:
             capabilities:
               add:

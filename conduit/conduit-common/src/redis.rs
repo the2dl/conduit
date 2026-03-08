@@ -102,6 +102,15 @@ pub mod keys {
         format!("cleargate:stats:{safe_id}:{safe_stat}")
     }
 
+    // --- CA certificate (shared across nodes) ---
+
+    /// PEM-encoded CA certificate
+    pub const CA_CERT: &str = "cleargate:ca:cert";
+    /// PEM-encoded CA private key
+    pub const CA_KEY: &str = "cleargate:ca:key";
+    /// Pub/sub channel for CA rotation notifications
+    pub const CA_RELOAD_CHANNEL: &str = "cleargate:ca:reload";
+
     // --- Threat detection keys ---
 
     /// Serialized bloom filter bitmap
