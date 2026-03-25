@@ -190,10 +190,3 @@ action = "block"
 # --- HTTP/2 Downstream ---
 [downstream]
 h2c = true
-
-[node]
-node_id = "node-f5991746-db7"
-dragonfly_url = "redis://node-f5991746-db7:GfOcsabQAvOgYzmn39k_gpINLfFahy7SNnVh1bi3XxQ@127.0.0.1:6380"
-name = "node-f5991746-db7"
-enrollment_token = "R7A-vW1iO-JXjAymoO_z1t6Ahq4opKVSt16w21NCXj0"
-hmac_key = "7AbdNO86gkM8qKGlCtzJzVus1Hf1tVa_WqacIZzaEEk"
