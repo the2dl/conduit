@@ -16,6 +16,8 @@ static THREAT_T0_DELTA: AtomicU64 = AtomicU64::new(0);
 static THREAT_T1_DELTA: AtomicU64 = AtomicU64::new(0);
 static THREAT_T2_DELTA: AtomicU64 = AtomicU64::new(0);
 static THREAT_T3_DELTA: AtomicU64 = AtomicU64::new(0);
+static CACHE_HITS_DELTA: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES_DELTA: AtomicU64 = AtomicU64::new(0);
 
 /// Record a request in local counters (called from the logging pipeline).
 pub fn record_request(blocked: bool, tls_intercepted: bool) {
@@ -26,6 +28,16 @@ pub fn record_request(blocked: bool, tls_intercepted: bool) {
     if tls_intercepted {
         TLS_DELTA.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Record a cache hit event in local counters.
+pub fn record_cache_hit() {
+    CACHE_HITS_DELTA.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record a cache miss event in local counters.
+pub fn record_cache_miss() {
+    CACHE_MISSES_DELTA.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record a threat detection event in local counters.
@@ -55,12 +67,14 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
     let t_t1 = THREAT_T1_DELTA.swap(0, Ordering::Relaxed);
     let t_t2 = THREAT_T2_DELTA.swap(0, Ordering::Relaxed);
     let t_t3 = THREAT_T3_DELTA.swap(0, Ordering::Relaxed);
+    let c_hit = CACHE_HITS_DELTA.swap(0, Ordering::Relaxed);
+    let c_miss = CACHE_MISSES_DELTA.swap(0, Ordering::Relaxed);
 
     // Read the current active connections gauge from the shared atomic
     let active = crate::service::ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
 
     // Nothing to flush
-    if req == 0 && blk == 0 && tls == 0 && t_blk == 0 && t_t0 == 0 {
+    if req == 0 && blk == 0 && tls == 0 && t_blk == 0 && t_t0 == 0 && c_hit == 0 && c_miss == 0 {
         // Still sync the active gauge
         if let Ok(mut conn) = pool.get().await {
             let _: Result<(), _> = conn.set(keys::STATS_ACTIVE, active).await;
@@ -73,7 +87,7 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
         return;
     }
 
-    trace!(req, blk, tls, active, "Flushing stats to Redis");
+    trace!(req, blk, tls, active, c_hit, c_miss, "Flushing stats to Redis");
 
     let Ok(mut conn) = pool.get().await else {
         // Put the deltas back so they aren't lost
@@ -85,6 +99,8 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
         THREAT_T1_DELTA.fetch_add(t_t1, Ordering::Relaxed);
         THREAT_T2_DELTA.fetch_add(t_t2, Ordering::Relaxed);
         THREAT_T3_DELTA.fetch_add(t_t3, Ordering::Relaxed);
+        CACHE_HITS_DELTA.fetch_add(c_hit, Ordering::Relaxed);
+        CACHE_MISSES_DELTA.fetch_add(c_miss, Ordering::Relaxed);
         return;
     };
 
@@ -101,6 +117,12 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
     }
     if tls > 0 {
         pipe.cmd("INCRBY").arg(keys::STATS_TLS).arg(tls);
+    }
+    if c_hit > 0 {
+        pipe.cmd("INCRBY").arg(keys::STATS_CACHE_HITS).arg(c_hit);
+    }
+    if c_miss > 0 {
+        pipe.cmd("INCRBY").arg(keys::STATS_CACHE_MISSES).arg(c_miss);
     }
     pipe.cmd("SET").arg(keys::STATS_ACTIVE).arg(active);
 
@@ -138,6 +160,16 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
                 .arg(keys::stats_node(nid, "tls"))
                 .arg(tls);
         }
+        if c_hit > 0 {
+            pipe.cmd("INCRBY")
+                .arg(keys::stats_node(nid, "cache_hits"))
+                .arg(c_hit);
+        }
+        if c_miss > 0 {
+            pipe.cmd("INCRBY")
+                .arg(keys::stats_node(nid, "cache_misses"))
+                .arg(c_miss);
+        }
         pipe.cmd("SET")
             .arg(keys::stats_node(nid, "active"))
             .arg(active);
@@ -154,6 +186,8 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
         THREAT_T1_DELTA.fetch_add(t_t1, Ordering::Relaxed);
         THREAT_T2_DELTA.fetch_add(t_t2, Ordering::Relaxed);
         THREAT_T3_DELTA.fetch_add(t_t3, Ordering::Relaxed);
+        CACHE_HITS_DELTA.fetch_add(c_hit, Ordering::Relaxed);
+        CACHE_MISSES_DELTA.fetch_add(c_miss, Ordering::Relaxed);
     }
 }
 

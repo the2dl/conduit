@@ -23,6 +23,8 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
             let blocked: u64 = conn.get(keys::STATS_BLOCKED).await.unwrap_or(0);
             let tls: u64 = conn.get(keys::STATS_TLS).await.unwrap_or(0);
             let active: u64 = conn.get(keys::STATS_ACTIVE).await.unwrap_or(0);
+            let cache_hits: u64 = conn.get(keys::STATS_CACHE_HITS).await.unwrap_or(0);
+            let cache_misses: u64 = conn.get(keys::STATS_CACHE_MISSES).await.unwrap_or(0);
 
             let threat_blocks: u64 = conn.get(keys::STATS_THREAT_BLOCKS).await.unwrap_or(0);
             let threat_t0: u64 = conn.get(keys::STATS_THREAT_T0).await.unwrap_or(0);
@@ -35,8 +37,8 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
                 blocked_requests: blocked,
                 active_connections: active,
                 tls_intercepted: tls,
-                cache_hits: 0,
-                cache_misses: 0,
+                cache_hits,
+                cache_misses,
                 threat_blocks,
                 threat_tier0_evals: threat_t0,
                 threat_tier1_escalations: threat_t1,

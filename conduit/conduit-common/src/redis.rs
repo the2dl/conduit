@@ -66,6 +66,12 @@ pub mod keys {
     /// Active connections gauge
     pub const STATS_ACTIVE: &str = "cleargate:stats:active";
 
+    /// Cache hits counter
+    pub const STATS_CACHE_HITS: &str = "cleargate:stats:cache_hits";
+
+    /// Cache misses counter
+    pub const STATS_CACHE_MISSES: &str = "cleargate:stats:cache_misses";
+
     /// Config hash
     pub const CONFIG: &str = "cleargate:config";
 

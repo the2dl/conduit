@@ -72,21 +72,37 @@
 	</Card.Root>
 </div>
 
-{#if stats.nodes && stats.nodes.length > 0}
-	{@const onlineCount = stats.nodes.filter(n => n.online).length}
-	<Card.Root class="mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+	{#if stats.nodes && stats.nodes.length > 0}
+		{@const onlineCount = stats.nodes.filter(n => n.online).length}
+		<Card.Root>
+			<Card.Header class="pb-2">
+				<Card.Description class="text-xs uppercase tracking-wide">Proxy Nodes</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<div class="text-2xl font-bold font-mono">
+					<span class="text-green-500">{onlineCount}</span>
+					<span class="text-muted-foreground">/ {stats.nodes.length}</span>
+					<span class="text-sm font-normal text-muted-foreground ml-2">online</span>
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+	<Card.Root>
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs uppercase tracking-wide">Proxy Nodes</Card.Description>
+			<Card.Description class="text-xs uppercase tracking-wide">HTTP Response Cache</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<div class="text-2xl font-bold font-mono">
-				<span class="text-green-500">{onlineCount}</span>
-				<span class="text-muted-foreground">/ {stats.nodes.length}</span>
-				<span class="text-sm font-normal text-muted-foreground ml-2">online</span>
+				<span class="text-primary">{stats.cache_hits.toLocaleString()}</span>
+				<span class="text-xs font-normal text-muted-foreground ml-1">hits</span>
+				<span class="text-muted-foreground mx-2">/</span>
+				<span class="text-muted-foreground">{stats.cache_misses.toLocaleString()}</span>
+				<span class="text-xs font-normal text-muted-foreground ml-1">misses</span>
 			</div>
 		</Card.Content>
 	</Card.Root>
-{/if}
+</div>
 
 <Card.Root>
 	<Card.Header>

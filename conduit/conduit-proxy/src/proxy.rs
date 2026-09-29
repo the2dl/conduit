@@ -780,9 +780,11 @@ impl ProxyHttp for ClearGateProxy {
             match status {
                 "hit" | "stale" | "stale-updating" | "revalidated" => {
                     crate::metrics::record_cache_hit();
+                    crate::stats::record_cache_hit();
                 }
                 "miss" | "expired" | "bypass" => {
                     crate::metrics::record_cache_miss();
+                    crate::stats::record_cache_miss();
                 }
                 _ => {} // "disabled", "uninitialized", "key" — not terminal states
             }
