@@ -131,12 +131,25 @@ impl ClearGateService {
         mut session: ServerSession,
         shutdown: &ShutdownWatch,
     ) -> Option<Stream> {
-        let uri = session.req_header().uri.clone();
-        let (host, port) = parse_connect_authority(&uri.to_string());
-        let client_ip = session
+        let req_header = session.req_header();
+        let target = if let Some(auth) = req_header.uri.authority() {
+            auth.as_str()
+        } else if let Some(host_hdr) = req_header.headers.get("Host").and_then(|h| h.to_str().ok()) {
+            host_hdr
+        } else {
+            std::str::from_utf8(req_header.raw_path()).unwrap_or("")
+        };
+        let (host, port) = parse_connect_authority(target);
+        let client_ip_raw = session
             .client_addr()
             .map(|a| a.to_string())
             .unwrap_or_default();
+        let port_suffix = client_ip_raw
+            .rsplit_once(':')
+            .map(|(_, p)| format!(":{p}"))
+            .unwrap_or_default();
+        let normalized_ip = crate::proxy::normalize_client_ip(crate::proxy::extract_ip_from_addr(&client_ip_raw));
+        let client_ip = format!("{normalized_ip}{port_suffix}");
 
         debug!(host = %host, port, "CONNECT request");
 
@@ -151,6 +164,15 @@ impl ClearGateService {
                     username = identity.username;
                     auth_method = identity.auth_method;
                 }
+            }
+        }
+
+        // Fall back to IP mapping or local OS user
+        if username.is_none() {
+            let identity = crate::identity::resolve_client_identity(&self.pool, &client_ip_raw).await;
+            if identity.username.is_some() {
+                username = identity.username;
+                auth_method = identity.auth_method;
             }
         }
 
@@ -249,8 +271,8 @@ impl ClearGateService {
                 if session.finish_body().await.is_err() {
                     return None;
                 }
-                let raw_stream = match session.finish().await {
-                    Ok(Some(s)) => s,
+                let raw_stream = match session {
+                    ServerSession::H1(s) => s.into_inner(),
                     _ => return None,
                 };
 
@@ -320,8 +342,8 @@ impl ClearGateService {
             return None;
         }
 
-        let raw_stream = match session.finish().await {
-            Ok(Some(s)) => s,
+        let raw_stream = match session {
+            ServerSession::H1(s) => s.into_inner(),
             _ => return None,
         };
 

@@ -242,6 +242,8 @@ impl GetTimingDigest for MitmStream {
     fn get_timing_digest(&self) -> Vec<Option<TimingDigest>> {
         vec![Some(TimingDigest {
             established_ts: SystemTime::now(),
+            establishment_duration: None,
+            offload_wait_duration: None,
         })]
     }
 }

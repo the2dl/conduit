@@ -1,6 +1,6 @@
 #[cfg(unix)]
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod conn_limit;
 mod ctx;
@@ -313,7 +313,12 @@ fn main() -> anyhow::Result<()> {
         dlp_engine: dlp_engine.clone(),
     };
     let proxy_inner = ClearGateProxy::new(deps);
-    let pingora_proxy = Arc::new(http_proxy(&server.configuration, proxy_inner));
+    let mut pingora_proxy_instance = http_proxy(&server.configuration, proxy_inner);
+    let mut server_options = pingora_core::apps::HttpServerOptions::default();
+    server_options.allow_connect_method_proxying = true;
+    server_options.h2_idle_timeout = Some(std::time::Duration::from_secs(60));
+    pingora_proxy_instance.server_options = Some(server_options);
+    let pingora_proxy = Arc::new(pingora_proxy_instance);
 
     // Build the custom service that handles both CONNECT and HTTP
     let cleargate = ClearGateService {

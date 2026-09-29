@@ -4,7 +4,10 @@ use boring::ec::{EcGroup, EcKey};
 use boring::hash::MessageDigest;
 use boring::nid::Nid;
 use boring::pkey::{PKey, Private};
-use boring::x509::extension::{BasicConstraints, ExtendedKeyUsage, SubjectAlternativeName};
+use boring::x509::extension::{
+    AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, SubjectAlternativeName,
+    SubjectKeyIdentifier,
+};
 use boring::x509::{X509Builder, X509NameBuilder, X509};
 use conduit_common::ca::CertAuthority;
 
@@ -45,18 +48,23 @@ pub fn generate_cert(domain: &str, ca: &CertAuthority) -> anyhow::Result<Generat
     builder.set_not_after(&not_after)?;
 
     // Extensions
-    builder.append_extension(BasicConstraints::new().build()?)?;
-    builder.append_extension(
-        ExtendedKeyUsage::new()
-            .server_auth()
-            .build()?,
-    )?;
-
-    // SAN with the domain
+    let basic_constraints = BasicConstraints::new().build()?;
+    let extended_key_usage = ExtendedKeyUsage::new().server_auth().build()?;
+    let skid = SubjectKeyIdentifier::new()
+        .build(&builder.x509v3_context(Some(&ca.cert), None))?;
+    let akid = AuthorityKeyIdentifier::new()
+        .keyid(false)
+        .issuer(false)
+        .build(&builder.x509v3_context(Some(&ca.cert), None))?;
     let san = SubjectAlternativeName::new()
         .dns(domain)
         .build(&builder.x509v3_context(Some(&ca.cert), None))?;
-    builder.append_extension(san)?;
+
+    builder.append_extension(&basic_constraints)?;
+    builder.append_extension(&extended_key_usage)?;
+    builder.append_extension(&skid)?;
+    builder.append_extension(&akid)?;
+    builder.append_extension(&san)?;
 
     // Sign with CA key
     builder.sign(&ca.key, MessageDigest::sha256())?;

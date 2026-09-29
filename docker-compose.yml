@@ -3,6 +3,7 @@ services:
   dragonfly:
     image: docker.dragonflydb.io/dragonflydb/dragonfly
     container_name: conduit-dragonfly
+    command: ["dragonfly", "--logtostderr", "--dir=/data", "--dbfilename=dump"]
     ports:
       - "6380:6379"
     volumes:

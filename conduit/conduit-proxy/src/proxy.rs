@@ -160,6 +160,32 @@ pub(crate) fn extract_ip_from_addr(addr: &str) -> &str {
     addr
 }
 
+/// Query the kernel's routing table for the primary non-loopback LAN IP (e.g. 192.168.x.x).
+pub(crate) fn get_primary_lan_ip() -> Option<String> {
+    static LAN_IP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    LAN_IP.get_or_init(|| {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("1.1.1.1:80").ok()?;
+        let local_addr = socket.local_addr().ok()?;
+        let ip = local_addr.ip().to_string();
+        if ip != "127.0.0.1" && ip != "::1" {
+            Some(ip)
+        } else {
+            None
+        }
+    }).clone()
+}
+
+/// Normalize loopback IP (127.0.0.1, ::1) to the host's actual LAN IP if available.
+pub(crate) fn normalize_client_ip(ip: &str) -> String {
+    if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+        if let Some(lan_ip) = get_primary_lan_ip() {
+            return lan_ip;
+        }
+    }
+    ip.to_string()
+}
+
 /// Extract just the path (+ query string) from a URI.
 fn extract_path_from_uri(uri: &http::Uri) -> String {
     if uri.authority().is_some() {
@@ -271,7 +297,7 @@ impl ProxyHttp for ClearGateProxy {
         if let Some((mitm_client_ip, mitm_port, mitm_username, mitm_auth_method, mitm_category, tunnel_killed)) =
             mitm_ctx
         {
-            ctx.client_ip = extract_ip_from_addr(&mitm_client_ip).to_string();
+            ctx.client_ip = normalize_client_ip(extract_ip_from_addr(&mitm_client_ip));
             ctx.tls_intercepted = true;
             ctx.scheme = "https".into();
             ctx.mitm_client_addr = mitm_client_addr;
@@ -309,7 +335,7 @@ impl ProxyHttp for ClearGateProxy {
                 .client_addr()
                 .map(|a| {
                     let s = a.to_string();
-                    extract_ip_from_addr(&s).to_string()
+                    normalize_client_ip(extract_ip_from_addr(&s))
                 })
                 .unwrap_or_default();
 
@@ -675,7 +701,7 @@ impl ProxyHttp for ClearGateProxy {
     fn cache_key_callback(&self, session: &Session, ctx: &mut Self::CTX) -> Result<CacheKey> {
         let uri = &session.req_header().uri;
         let primary = format!("{}://{}:{}{}", ctx.scheme, ctx.host, ctx.port, uri);
-        Ok(CacheKey::new(String::new(), primary, ""))
+        Ok(CacheKey::new(primary, ""))
     }
 
     fn response_cache_filter(

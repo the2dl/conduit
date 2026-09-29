@@ -140,18 +140,18 @@ impl CertAuthority {
         builder.set_not_after(&not_after)?;
 
         // CA extensions
-        builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-        builder.append_extension(
-            KeyUsage::new()
-                .critical()
-                .key_cert_sign()
-                .crl_sign()
-                .build()?,
-        )?;
-        builder.append_extension(
-            SubjectKeyIdentifier::new()
-                .build(&builder.x509v3_context(None, None))?,
-        )?;
+        let basic_constraints = BasicConstraints::new().critical().ca().build()?;
+        let key_usage = KeyUsage::new()
+            .critical()
+            .key_cert_sign()
+            .crl_sign()
+            .build()?;
+        let skid = SubjectKeyIdentifier::new()
+            .build(&builder.x509v3_context(None, None))?;
+
+        builder.append_extension(&basic_constraints)?;
+        builder.append_extension(&key_usage)?;
+        builder.append_extension(&skid)?;
 
         builder.sign(&key, MessageDigest::sha256())?;
         let cert = builder.build();

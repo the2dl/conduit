@@ -25,6 +25,7 @@ members = [
     "pingora/pingora-ketama",
     "pingora/pingora-load-balancing",
     "pingora/pingora-memory-cache",
+    "pingora/pingora-prometheus",
     "pingora/tinyufo",
 ]
 
@@ -39,9 +40,9 @@ bytes = "1"
 derivative = "2.2"
 http = "1"
 log = "0.4"
-h2 = ">=0.4.11"
+h2 = ">=0.4.16"
 once_cell = "1"
-lru = "0.16"
+lru = "0.18.2"
 ahash = ">=0.8.9"
 
 # === conduit deps ===
@@ -62,8 +63,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 deadpool-redis = "0.23"
 redis = { version = "1", features = ["tokio-comp", "tokio-rustls-comp"] }
-boring = "4.21"
-boring-sys = "4.21"
+boring = "5"
+boring-sys = "5"
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 dashmap = "6"
 chrono = { version = "0.4", features = ["serde"] }
@@ -93,6 +94,9 @@ fnv = "1"
 futures = "0.3"
 brotli = "7"
 zstd = "0.13"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 
 [profile.release]
 opt-level = 3
