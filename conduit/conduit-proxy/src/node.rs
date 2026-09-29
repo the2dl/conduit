@@ -17,26 +17,37 @@ type HmacSha256 = Hmac<Sha256>;
 /// Spawn the node lifecycle on a dedicated thread (same pattern as logging pipeline).
 /// Handles: enrollment verification, self-registration, heartbeat loop, pub/sub config reload.
 pub fn spawn_node_lifecycle(config: &Arc<ClearGateConfig>, pool: &Arc<Pool>) {
-    let node_cfg = match config.node {
-        Some(ref n) => n.clone(),
-        None => return,
-    };
-
     let pool = pool.clone();
     let config = config.clone();
-    let dragonfly_url = node_cfg.dragonfly_url.clone();
 
-    std::thread::Builder::new()
-        .name("cleargate-node".into())
-        .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create node lifecycle runtime");
+    if let Some(ref node_cfg) = config.node {
+        let node_cfg = node_cfg.clone();
+        let dragonfly_url = node_cfg.dragonfly_url.clone();
+        std::thread::Builder::new()
+            .name("cleargate-node".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create node lifecycle runtime");
 
-            rt.block_on(run_node_lifecycle(config, pool, node_cfg, dragonfly_url));
-        })
-        .expect("Failed to spawn node lifecycle thread");
+                rt.block_on(run_node_lifecycle(config, pool, node_cfg, dragonfly_url));
+            })
+            .expect("Failed to spawn node lifecycle thread");
+    } else {
+        let dragonfly_url = config.dragonfly_url.clone();
+        std::thread::Builder::new()
+            .name("cleargate-reload".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create pubsub runtime");
+
+                rt.block_on(pubsub_listener(&dragonfly_url, "standalone", pool));
+            })
+            .expect("Failed to spawn reload listener thread");
+    }
 }
 
 async fn run_node_lifecycle(
@@ -67,8 +78,9 @@ async fn run_node_lifecycle(
     // Spawn pub/sub listener in a separate task (needs its own redis client, not pool)
     let dragonfly_url_ps = dragonfly_url.clone();
     let node_id_ps = node_id.clone();
+    let pool_ps = pool.clone();
     tokio::spawn(async move {
-        pubsub_listener(&dragonfly_url_ps, &node_id_ps).await;
+        pubsub_listener(&dragonfly_url_ps, &node_id_ps, pool_ps).await;
     });
 
     // Decode HMAC key if present (for signing heartbeats)
@@ -204,7 +216,7 @@ async fn send_heartbeat(
     Ok(())
 }
 
-async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
+async fn pubsub_listener(dragonfly_url: &str, node_id: &str, pool: Arc<Pool>) {
     // Create a dedicated redis client for pub/sub (can't use pooled connections).
     let client = match redis::Client::open(dragonfly_url) {
         Ok(c) => c,
@@ -251,6 +263,7 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str) {
             policy::rules::invalidate_cache();
             policy::categories::invalidate_cache();
             crate::dlp::invalidate_cache();
+            crate::runtime_config::reload(&pool).await;
         }
         if channel == keys::THREAT_RELOAD_CHANNEL {
             crate::threat::feeds::trigger_immediate_refresh();

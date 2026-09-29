@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use conduit_common::config::ClearGateConfig;
 use conduit_common::types::{AuthMethod, BlockReason, LogEntry, PolicyAction};
-use conduit_common::util::html_escape;
 use deadpool_redis::Pool;
 use pingora_core::apps::ServerApp;
 use pingora_core::protocols::http::ServerSession;
@@ -235,17 +234,20 @@ impl ClearGateService {
             }
         }
 
+        let rt_cfg = crate::runtime_config::get();
+
         let (action, rule_id, matched_rule_name) = policy::rules::evaluate(
             &self.pool,
             &host,
             category.as_deref(),
             username.as_deref(),
             &[],
-            self.config.fail_closed,
+            rt_cfg.fail_closed,
         )
         .await;
 
-        if threat_blocked || action == PolicyAction::Block {
+        let should_block = (threat_blocked || action == PolicyAction::Block) && rt_cfg.prevention_mode;
+        if should_block {
             let block_reason = if threat_blocked {
                 if rep_blocked { BlockReason::ThreatReputation } else { BlockReason::ThreatHeuristic }
             } else {
@@ -263,7 +265,15 @@ impl ClearGateService {
 
             info!(host = %host, category = ?category, "Blocking CONNECT");
 
-            if self.config.tls_intercept {
+            let node_name = crate::block_page::get_node_name(&self.config);
+            let entry_uuid = uuid::Uuid::new_v4();
+            let simple_hex = entry_uuid.simple().to_string();
+            let ref_id = format!("cnd-{}-{}", &simple_hex[..4], &simple_hex[4..8]);
+            let entry_id = entry_uuid.to_string();
+            let now = chrono::Utc::now();
+            let timestamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            if rt_cfg.tls_intercept {
                 let resp = ResponseHeader::build(200, Some(0)).unwrap();
                 if session.write_response_header(Box::new(resp)).await.is_err() {
                     return None;
@@ -276,13 +286,40 @@ impl ClearGateService {
                     _ => return None,
                 };
 
-                let cat_label = category.as_deref().unwrap_or("uncategorized");
-                let block_html = build_block_html(&host, cat_label, &reason_text, &self.config);
+                let block_ctx = if threat_blocked {
+                    crate::block_page::BlockPageContext::for_threat(
+                        &host,
+                        "/",
+                        "GET",
+                        &reason_text,
+                        category.as_deref().or(Some("malicious")),
+                        username.as_deref(),
+                        &client_ip,
+                        &timestamp,
+                        &ref_id,
+                        &node_name,
+                    )
+                } else {
+                    crate::block_page::BlockPageContext::for_policy(
+                        &host,
+                        "/",
+                        "GET",
+                        matched_rule_name.as_deref(),
+                        category.as_deref(),
+                        username.as_deref(),
+                        &client_ip,
+                        &timestamp,
+                        &ref_id,
+                        &node_name,
+                    )
+                };
+
                 tunnel::serve_block_page(
                     raw_stream,
                     &host,
                     &self.cert_cache,
-                    &block_html,
+                    block_ctx,
+                    self.config.block_page_html.as_deref(),
                 )
                 .await;
             } else {
@@ -296,8 +333,8 @@ impl ClearGateService {
                 .filter(|v| !v.signals.is_empty())
                 .map(|v| v.signals.clone());
             let entry = LogEntry {
-                id: uuid::Uuid::new_v4().to_string(),
-                timestamp: chrono::Utc::now(),
+                id: entry_id,
+                timestamp: now,
                 client_ip: client_ip.clone(),
                 username: username.clone(),
                 auth_method,
@@ -314,12 +351,12 @@ impl ClearGateService {
                 request_bytes: 0,
                 response_bytes: 0,
                 duration_ms: 0,
-                tls_intercepted: self.config.tls_intercept,
+                tls_intercepted: rt_cfg.tls_intercept,
                 upstream_addr: None,
                 content_type: None,
                 cache_status: None,
-                node_id: None,
-                node_name: None,
+                node_id: self.config.node.as_ref().map(|n| n.node_id.clone()),
+                node_name: Some(node_name),
                 threat_score,
                 threat_tier,
                 threat_blocked: if threat_blocked { Some(true) } else { None },
@@ -397,45 +434,7 @@ fn parse_host_port(s: &str, default_port: u16) -> (String, u16) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_block_html(host: &str, category: &str, reason: &str, config: &ClearGateConfig) -> String {
-    let template = config.block_page_html.as_deref().unwrap_or(
-        r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Access Blocked</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#fafafa;color:#18181b}
-.card{background:#fff;border:1px solid #e4e4e7;border-radius:10px;padding:2.5rem 3rem;max-width:480px;width:90%;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
-.icon{width:48px;height:48px;margin:0 auto 1.25rem;background:#fff1f2;border-radius:50%;display:flex;align-items:center;justify-content:center}
-.icon svg{width:24px;height:24px;color:#be123c}
-h1{font-size:1.25rem;font-weight:600;color:#18181b;margin:0 0 .75rem}
-p{margin:.5rem 0;line-height:1.5}
-.domain{color:#be123c;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;word-break:break-all}
-.cat{color:#71717a;text-transform:uppercase;font-size:.75rem;font-weight:500;letter-spacing:.06em;margin-top:1rem}
-.reason{color:#71717a;font-size:.85rem}
-.footer{color:#a1a1aa;font-size:.75rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid #f4f4f5}
-@media(prefers-color-scheme:dark){
-body{background:#18181b;color:#fafafa}
-.card{background:#27272a;border-color:#3f3f46;box-shadow:0 1px 3px rgba(0,0,0,.3)}
-.icon{background:#4c0519}
-.icon svg{color:#fb7185}
-h1{color:#fafafa}
-.domain{color:#fb7185}
-.cat,.reason{color:#a1a1aa}
-.footer{color:#71717a;border-color:#3f3f46}
-}
-</style></head>
-<body><div class="card">
-<div class="icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg></div>
-<h1>Access Blocked</h1>
-<p>Your request to <span class="domain">{{HOST}}</span> has been blocked.</p>
-<p class="cat">{{CATEGORY}}</p>
-<p class="reason">{{REASON}}</p>
-<p class="footer">conduit proxy</p>
-</div></body></html>"#,
-    );
-    template
-        .replace("{{HOST}}", &html_escape(host))
-        .replace("{{CATEGORY}}", &html_escape(category))
-        .replace("{{REASON}}", &html_escape(reason))
+    crate::block_page::build_block_html(host, category, reason, config)
 }

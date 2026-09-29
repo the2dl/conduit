@@ -51,12 +51,19 @@ export interface LogEntry {
 	node_name: string | null;
 	block_reason?: string | null;
 	rule_name?: string | null;
+	threat_score?: number | null;
+	threat_tier?: string | null;
+	threat_blocked?: boolean | null;
 	threat_signals?: { name: string; score: number; tier: string }[] | null;
+	content_type?: string | null;
+	upstream_addr?: string | null;
+	cache_status?: string | null;
 }
 
 export interface CategoryEntry {
 	domain: string;
 	category: string;
+	source?: string;
 }
 
 export interface PaginatedCategories {
@@ -75,12 +82,29 @@ export interface PolicyRule {
 	users: string[];
 	groups: string[];
 	action: 'allow' | 'block' | 'log';
+	hits?: number;
 }
 
 export interface Health {
 	status: string;
 	dragonfly: boolean;
 	version: string;
+	dragonfly_keys?: number;
+}
+
+export interface TimeseriesBucket {
+	timestamp: string;
+	total: number;
+	blocked: number;
+}
+
+export interface TimeseriesResponse {
+	range: string;
+	bucket_seconds: number;
+	buckets: TimeseriesBucket[];
+	total_in_range: number;
+	blocked_in_range: number;
+	prior_period_delta_pct: number | null;
 }
 
 export interface NodeHeartbeat {
@@ -122,11 +146,19 @@ export interface DlpRule {
 	action: 'log' | 'block' | 'redact';
 	enabled: boolean;
 	builtin: boolean;
+	hits?: number;
 }
 
 export const api = {
 	health: () => request<Health>('/health'),
-	stats: () => request<Stats>('/stats'),
+	stats: Object.assign(
+		() => request<Stats>('/stats'),
+		{
+			get: () => request<Stats>('/stats'),
+			timeseries: (range = '24h') =>
+				request<TimeseriesResponse>(`/stats/timeseries?range=${encodeURIComponent(range)}`)
+		}
+	),
 	logs: async (params?: Record<string, string>) => {
 		const qs = params ? '?' + new URLSearchParams(params).toString() : '';
 		const res = await request<{ entries: LogEntry[]; next_cursor: string | null; total: number }>(`/logs${qs}`);

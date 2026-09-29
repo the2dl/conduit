@@ -129,6 +129,40 @@ async fn run_logging_pipeline(
             entry.tls_intercepted,
         );
 
+        // Track policy hits in Redis
+        if let Some(ref rid) = entry.rule_id {
+            let pool_c = pool.clone();
+            let rid_c = rid.clone();
+            tokio::spawn(async move {
+                if let Ok(mut conn) = pool_c.get().await {
+                    let _: Result<(), _> = redis::cmd("HINCRBY")
+                        .arg(conduit_common::redis::keys::STATS_POLICY_HITS)
+                        .arg(rid_c)
+                        .arg(1)
+                        .query_async(&mut *conn)
+                        .await;
+                }
+            });
+        }
+
+        // Track DLP hits in Redis
+        if let Some(ref dlp_list) = entry.dlp_matches {
+            let pool_c = pool.clone();
+            let dlp_list_c = dlp_list.clone();
+            tokio::spawn(async move {
+                if let Ok(mut conn) = pool_c.get().await {
+                    for m in dlp_list_c {
+                        let _: Result<(), _> = redis::cmd("HINCRBY")
+                            .arg(conduit_common::redis::keys::STATS_DLP_HITS)
+                            .arg(m)
+                            .arg(1)
+                            .query_async(&mut *conn)
+                            .await;
+                    }
+                }
+            });
+        }
+
         // Track threat stats
         if let Some(tier) = entry.threat_tier {
             if tier != ThreatTier::None {

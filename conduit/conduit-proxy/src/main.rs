@@ -2,6 +2,7 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod block_page;
 mod conn_limit;
 mod ctx;
 mod dlp;
@@ -15,6 +16,7 @@ mod node;
 mod policy;
 mod proxy;
 mod rate_limit;
+mod runtime_config;
 mod service;
 mod stats;
 mod threat;
@@ -77,6 +79,8 @@ fn main() -> anyhow::Result<()> {
             error!("Dragonfly connection check failed: {e}");
             std::process::exit(1);
         }
+        // Initialize dynamic runtime configuration from Redis
+        rt.block_on(runtime_config::reload(&pool_check));
     }
 
     // CA: Dragonfly → disk → generate in-memory (no disk files required)

@@ -47,14 +47,27 @@ pub struct RequestContext {
     pub dlp_body_buffer: Option<Vec<u8>>,
     /// When true, upstream was selected by load balancer — skip SSRF check.
     pub lb_routed: bool,
+    /// Unique request ID.
+    pub req_id: String,
+    /// Human-friendly short reference ID (e.g. cnd-7f3a-91c2) for block pages and logs.
+    pub ref_id: String,
     /// DLP pattern names that matched (populated at end of request body stream).
     pub dlp_matches: Option<Vec<String>>,
+    /// Masked snippet of DLP match for display on block pages.
+    pub dlp_matched_snippet: Option<String>,
 }
 
 impl RequestContext {
     pub fn new() -> Self {
+        let uuid_val = uuid::Uuid::new_v4();
+        let simple_hex = uuid_val.simple().to_string();
+        let ref_id = format!("cnd-{}-{}", &simple_hex[..4], &simple_hex[4..8]);
+        let req_id = uuid_val.to_string();
+
         Self {
             start_time: Utc::now(),
+            req_id,
+            ref_id,
             client_ip: String::new(),
             identity: UserIdentity::default(),
             host: String::new(),
@@ -85,6 +98,7 @@ impl RequestContext {
             dlp_body_buffer: None,
             lb_routed: false,
             dlp_matches: None,
+            dlp_matched_snippet: None,
         }
     }
 

@@ -60,7 +60,7 @@ enabled = true
 
 # Tier 0: heuristics
 tier0_escalation_threshold = 0.3   # Score above this -> escalate to Tier 1
-tier0_block_threshold = 99.0        # Set >1.0 for non-blocking monitoring
+tier0_block_threshold = 0.9        # Score above this -> block when prevention_mode is active
 dga_entropy_threshold = 3.5        # Shannon entropy threshold for DGA detection
 
 # Tier 1: ML decision tree (runs on ~2-5% of requests that T0 flags)
@@ -79,7 +79,7 @@ tier3_enabled = false
 # Reputation: learns per-domain trust over time
 reputation_enabled = true
 reputation_decay_hours = 168       # 1 week half-life
-reputation_block_threshold = 99.0  # Set >1.0 for non-blocking monitoring
+reputation_block_threshold = 0.55  # Score above this -> block when prevention_mode is active
 
 # Bloom filter for threat feeds
 bloom_capacity = 2000000
@@ -133,3 +133,11 @@ action = "log"                        # Log/audit mode rather than block
 # --- HTTP/2 Downstream ---
 [downstream]
 h2c = true
+
+# --- Cluster Node Registration ---
+[node]
+node_id = "node-a45bca93-95d"
+dragonfly_url = "redis://127.0.0.1:6380"
+name = "mars-local"
+heartbeat_interval_secs = 10
+

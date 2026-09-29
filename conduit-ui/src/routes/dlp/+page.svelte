@@ -1,230 +1,125 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type DlpRule } from '$lib/api';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
-	import * as Select from '$lib/components/ui/select';
+	import { drawer } from '$lib/drawer.svelte';
+	import { showToast } from '$lib/toast.svelte';
 
 	let rules = $state<DlpRule[]>([]);
-	let showAdd = $state(false);
-	let name = $state('');
-	let regex = $state('');
-	let action = $state<'log' | 'block' | 'redact'>('log');
-	let error = $state('');
-	let editingId = $state<string | null>(null);
-	let editName = $state('');
-	let editRegex = $state('');
-	let editAction = $state<'log' | 'block' | 'redact'>('log');
-	let editError = $state('');
+	let loading = $state(true);
 
-	async function load() {
-		try { rules = await api.dlp.list(); } catch { /* ignore */ }
-	}
-
-	function resetForm() {
-		name = ''; regex = ''; action = 'log'; error = '';
-	}
-
-	async function save() {
-		error = '';
-		if (!name.trim() || !regex.trim()) {
-			error = 'Name and regex are required';
-			return;
-		}
+	async function loadRules() {
+		loading = true;
 		try {
-			await api.dlp.create({ name: name.trim(), regex: regex.trim(), action, enabled: true });
-			showAdd = false;
-			resetForm();
-			await load();
-		} catch (e: any) {
-			error = e.message || 'Failed to create rule';
+			rules = await api.dlp.list();
+		} catch {
+			/* ignore */
 		}
+		loading = false;
 	}
 
-	async function remove(id: string) {
-		await api.dlp.remove(id);
-		await load();
-	}
-
-	async function toggle(rule: DlpRule) {
-		await api.dlp.update({ ...rule, enabled: !rule.enabled });
-		await load();
-	}
-
-	function startEdit(rule: DlpRule) {
-		editingId = rule.id;
-		editName = rule.name;
-		editRegex = rule.regex;
-		editAction = rule.action;
-		editError = '';
-	}
-
-	function cancelEdit() {
-		editingId = null;
-		editError = '';
-	}
-
-	async function saveEdit(rule: DlpRule) {
-		editError = '';
-		if (!editName.trim() || !editRegex.trim()) {
-			editError = 'Name and regex are required';
-			return;
-		}
+	async function toggleRule(rule: DlpRule, e: MouseEvent) {
+		e.stopPropagation();
 		try {
-			await api.dlp.update({
-				...rule,
-				name: editName.trim(),
-				regex: editRegex.trim(),
-				action: editAction
-			});
-			editingId = null;
-			await load();
+			const updated = { ...rule, enabled: !rule.enabled };
+			await api.dlp.update(updated);
+			rules = rules.map((r) => (r.id === rule.id ? updated : r));
+			showToast(updated.enabled ? `Enabled ${rule.name}` : `Disabled ${rule.name}`);
 		} catch (e: any) {
-			editError = e.message || 'Failed to update rule';
+			showToast(e.message || 'Failed to update rule');
 		}
 	}
 
-	function onActionChange(val: string | undefined) {
-		if (val) action = val as DlpRule['action'];
+	function getActionInfo(action: string) {
+		if (action === 'block') return { label: 'BLOCK', color: '#F87171' };
+		if (action === 'redact') return { label: 'REDACT', color: '#C084FC' };
+		return { label: 'LOG', color: '#FDBA74' };
 	}
 
-	function onEditActionChange(val: string | undefined) {
-		if (val) editAction = val as DlpRule['action'];
+	function editRule(rule: DlpRule) {
+		drawer.openDlp({
+			id: rule.id,
+			name: rule.name,
+			pattern: rule.regex,
+			action: rule.action
+		});
 	}
 
-	onMount(load);
+	onMount(() => {
+		loadRules();
+		drawer.setDlpSavedCallback(loadRules);
+	});
 </script>
 
-<div class="mb-6">
-	<h2 class="text-2xl font-semibold">Data Loss Prevention</h2>
-	<p class="text-sm text-muted-foreground mt-1">Manage DLP rules that scan response bodies for sensitive data</p>
-</div>
+<div class="flex-1 flex flex-col h-full overflow-hidden">
+	<!-- Page Header -->
+	<header class="h-14 shrink-0 flex items-center gap-3 px-7 border-b border-[#1F1F24]">
+		<span class="text-[15px] font-semibold">Data loss prevention</span>
+		<span class="text-[12.5px] text-[#6B6B73]">patterns scanned against bodies</span>
+		<button
+			type="button"
+			onclick={() => drawer.openDlp()}
+			class="ml-auto h-7 px-3 border-none rounded-md bg-[#ED2377] text-white text-[12.5px] font-medium cursor-pointer hover:bg-[#F23D88] transition-colors"
+		>
+			New rule
+		</button>
+	</header>
 
-<div class="mb-4">
-	<Button onclick={() => { showAdd = !showAdd; if (showAdd) resetForm(); }}>
-		{showAdd ? 'Cancel' : 'Add Rule'}
-	</Button>
-</div>
-
-{#if showAdd}
-	<Card.Root class="mb-4">
-		<Card.Content class="pt-6">
-			<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-				<div class="space-y-2">
-					<Label>Name</Label>
-					<Input type="text" bind:value={name} placeholder="e.g. Internal Project IDs" />
-				</div>
-				<div class="space-y-2">
-					<Label>Regex Pattern</Label>
-					<Input type="text" bind:value={regex} placeholder="PROJ-\d{'{'}6{'}'}" class="font-mono text-sm" />
-				</div>
-				<div class="space-y-2">
-					<Label>Action</Label>
-					<Select.Root type="single" value={action} onValueChange={onActionChange}>
-						<Select.Trigger class="w-full">
-							{action === 'block' ? 'Block' : action === 'redact' ? 'Redact' : 'Log Only'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="log" label="Log Only" />
-							<Select.Item value="block" label="Block" />
-							<Select.Item value="redact" label="Redact" />
-						</Select.Content>
-					</Select.Root>
-				</div>
+	<!-- Table Area -->
+	<div class="flex-1 overflow-auto p-5 px-7 pb-10">
+		<div class="border border-[#1F1F24] rounded-lg overflow-hidden bg-[#111113] text-[13px]">
+			<div
+				class="grid grid-cols-[minmax(140px,1fr)_minmax(240px,2fr)_64px_70px_50px_36px] gap-3.5 items-center h-8 px-4 bg-[#111113] border-b border-[#1F1F24] font-mono text-[10.5px] tracking-wider uppercase text-[#55555C]"
+			>
+				<span>Name</span>
+				<span>Pattern</span>
+				<span>Action</span>
+				<span>Source</span>
+				<span class="text-right">Hits</span>
+				<span>On</span>
 			</div>
-			{#if error}
-				<p class="text-sm text-destructive mt-2">{error}</p>
-			{/if}
-			<Button onclick={save} class="mt-4">Save Rule</Button>
-		</Card.Content>
-	</Card.Root>
-{/if}
 
-<Card.Root class="overflow-x-auto">
-	<Card.Content class="pt-6">
-		{#if rules.length === 0}
-			<p class="text-sm text-muted-foreground">No DLP rules defined</p>
-		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Pattern</Table.Head>
-						<Table.Head>Action</Table.Head>
-						<Table.Head>Type</Table.Head>
-						<Table.Head>Enabled</Table.Head>
-						<Table.Head>Actions</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each rules as rule}
-						{#if editingId === rule.id}
-							<Table.Row>
-								<Table.Cell>
-									<Input type="text" bind:value={editName} class="h-8 text-sm" />
-								</Table.Cell>
-								<Table.Cell>
-									<Input type="text" bind:value={editRegex} class="h-8 text-sm font-mono" />
-								</Table.Cell>
-								<Table.Cell>
-									<Select.Root type="single" value={editAction} onValueChange={onEditActionChange}>
-										<Select.Trigger class="h-8 text-sm w-24">
-											{editAction === 'block' ? 'Block' : editAction === 'redact' ? 'Redact' : 'Log'}
-										</Select.Trigger>
-										<Select.Content>
-											<Select.Item value="log" label="Log Only" />
-											<Select.Item value="block" label="Block" />
-											<Select.Item value="redact" label="Redact" />
-										</Select.Content>
-									</Select.Root>
-								</Table.Cell>
-								<Table.Cell>
-									<span class="text-xs text-muted-foreground">{rule.builtin ? 'Built-in' : 'Custom'}</span>
-								</Table.Cell>
-								<Table.Cell></Table.Cell>
-								<Table.Cell>
-									<div class="flex gap-1">
-										<Button variant="outline" size="sm" onclick={() => saveEdit(rule)}>Save</Button>
-										<Button variant="ghost" size="sm" onclick={cancelEdit}>Cancel</Button>
-									</div>
-									{#if editError}
-										<p class="text-xs text-destructive mt-1">{editError}</p>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row class={rule.enabled ? '' : 'opacity-50'}>
-								<Table.Cell class="font-medium">{rule.name}</Table.Cell>
-								<Table.Cell>
-									<code class="text-xs font-mono bg-muted px-1.5 py-0.5 rounded max-w-xs truncate block">{rule.regex}</code>
-								</Table.Cell>
-								<Table.Cell>
-									<span class="badge-{rule.action} px-2 py-0.5 rounded text-xs font-semibold uppercase">{rule.action}</span>
-								</Table.Cell>
-								<Table.Cell>
-									<span class="text-xs text-muted-foreground">{rule.builtin ? 'Built-in' : 'Custom'}</span>
-								</Table.Cell>
-								<Table.Cell>
-									<Button variant="outline" size="sm" onclick={() => toggle(rule)}>
-										{rule.enabled ? 'On' : 'Off'}
-									</Button>
-								</Table.Cell>
-								<Table.Cell>
-									<div class="flex gap-1">
-										<Button variant="outline" size="sm" onclick={() => startEdit(rule)}>Edit</Button>
-										{#if !rule.builtin}
-											<Button variant="destructive" size="sm" onclick={() => remove(rule.id)}>Delete</Button>
-										{/if}
-									</div>
-								</Table.Cell>
-							</Table.Row>
-						{/if}
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		{/if}
-	</Card.Content>
-</Card.Root>
+			{#if loading}
+				<div class="p-8 text-xs text-[#6B6B73]">Loading DLP rules...</div>
+			{:else if rules.length === 0}
+				<div class="p-8 text-xs text-[#6B6B73]">No DLP rules configured.</div>
+			{:else}
+				{#each rules as r}
+					{@const act = getActionInfo(r.action)}
+					<div
+						role="button"
+						tabindex="0"
+						onclick={() => editRule(r)}
+						onkeydown={(e) => e.key === 'Enter' && editRule(r)}
+						class="grid grid-cols-[minmax(140px,1fr)_minmax(240px,2fr)_64px_70px_50px_36px] gap-3.5 items-center h-11 px-4 border-b border-[#151518] last:border-none cursor-pointer transition-colors hover:bg-[#131316] text-left text-[13px]
+							{r.enabled ? 'opacity-100' : 'opacity-50'}"
+					>
+						<span class="text-[13px] font-medium text-[#E6E6E8] truncate">{r.name}</span>
+						<span class="font-mono text-xs text-[#A3A3AB] truncate">{r.regex}</span>
+						<span
+							class="flex items-center gap-1.5 font-mono text-[10.5px] font-semibold tracking-wider"
+							style="color: {act.color};"
+						>
+							<span class="w-[5px] h-[5px] rounded-full" style="background: {act.color};"></span>
+							{act.label}
+						</span>
+						<span class="font-mono text-[11px] text-[#6B6B73]">
+							{r.builtin ? 'built-in' : 'custom'}
+						</span>
+						<span class="text-right font-mono text-xs text-[#A3A3AB]">{(r.hits || 0).toLocaleString()}</span>
+
+						<!-- On/Off Switch -->
+						<button
+							type="button"
+							aria-label="Toggle rule"
+							onclick={(e) => toggleRule(r, e)}
+							class="w-7 h-4 border-none rounded-full p-0.5 flex items-center cursor-pointer transition-colors
+								{r.enabled ? 'bg-[#ED2377] justify-end' : 'bg-[#2A2A30] justify-start'}"
+						>
+							<span class="w-3 h-3 rounded-full bg-white block"></span>
+						</button>
+					</div>
+				{/each}
+			{/if}
+		</div>
+	</div>
+</div>

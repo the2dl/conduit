@@ -209,6 +209,8 @@ pub struct PolicyRule {
     #[serde(default)]
     pub groups: Vec<String>,
     pub action: PolicyAction,
+    #[serde(default)]
+    pub hits: u64,
 }
 
 /// Domain category entry.
@@ -216,6 +218,12 @@ pub struct PolicyRule {
 pub struct CategoryEntry {
     pub domain: String,
     pub category: String,
+    #[serde(default = "default_feed_source")]
+    pub source: String,
+}
+
+fn default_feed_source() -> String {
+    "feed".to_string()
 }
 
 /// Stats counters.
@@ -342,6 +350,8 @@ pub struct DlpRule {
     /// Whether this is a built-in rule (cannot be deleted via API).
     #[serde(default)]
     pub builtin: bool,
+    #[serde(default)]
+    pub hits: u64,
 }
 fn default_true() -> bool { true }
 

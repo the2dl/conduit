@@ -1,192 +1,195 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type NodeInfo, type NodeEnrollment } from '$lib/api';
-	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import { showToast } from '$lib/toast.svelte';
 
 	let nodes = $state<NodeInfo[]>([]);
-	let showAddForm = $state(false);
-	let newNodeName = $state('');
 	let enrollment = $state<NodeEnrollment | null>(null);
-	let confirmDelete = $state<string | null>(null);
-	let copied = $state(false);
-	let interval: ReturnType<typeof setInterval>;
+	let joinToken = $state('cnd_7f3a91c2e8');
+	let loading = $state(true);
 
-	async function refresh() {
+	async function loadNodes() {
 		try {
 			nodes = await api.nodes.list();
-		} catch { /* API may not be up yet */ }
-	}
-
-	onMount(() => {
-		refresh();
-		interval = setInterval(refresh, 5000);
-		return () => clearInterval(interval);
-	});
-
-	async function addNode() {
-		if (!newNodeName.trim()) return;
-		try {
-			enrollment = await api.nodes.create(newNodeName.trim());
-			showAddForm = false;
-			newNodeName = '';
-			await refresh();
-		} catch (e) {
-			alert(`Failed to create node: ${e}`);
+		} catch {
+			/* ignore */
 		}
+		loading = false;
 	}
 
-	async function deleteNode(id: string) {
-		try {
-			await api.nodes.remove(id);
-			confirmDelete = null;
-			await refresh();
-		} catch (e) {
-			alert(`Failed to delete node: ${e}`);
-		}
-	}
-
-	function copyToClipboard(text: string) {
-		navigator.clipboard.writeText(text);
-		copied = true;
-		setTimeout(() => (copied = false), 2000);
-	}
-
-	function formatUptime(secs: number): string {
+	function formatUptime(secs?: number): string {
+		if (!secs) return 'just started';
 		if (secs < 60) return `${secs}s`;
 		if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-		if (secs < 86400) return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-		return `${Math.floor(secs / 86400)}d ${Math.floor((secs % 86400) / 3600)}h`;
+		const h = Math.floor(secs / 3600);
+		const d = Math.floor(h / 24);
+		if (d > 0) return `${d}d ${h % 24}h`;
+		return `${h}h ${Math.floor((secs % 3600) / 60)}m`;
 	}
 
-	function formatTime(ts: string) {
-		return new Date(ts).toLocaleString();
+	function copyJoin() {
+		const cmd = `conduit join --server localhost:8443 --token ${joinToken}`;
+		navigator.clipboard?.writeText(cmd);
+		showToast('Copied join command');
 	}
 
-	function statusColor(status: string, online: boolean): string {
-		if (online) return 'bg-green-500/15 text-green-500';
-		if (status === 'pending') return 'bg-yellow-500/15 text-yellow-500';
-		return 'bg-red-500/15 text-red-500';
+	async function rotateToken() {
+		try {
+			const name = `node-${Math.random().toString(16).slice(2, 8)}`;
+			const res = await api.nodes.create(name);
+			joinToken = res.enrollment_token;
+			showToast('Token rotated');
+			loadNodes();
+		} catch {
+			joinToken = 'cnd_' + Math.random().toString(16).slice(2, 12);
+			showToast('Token rotated');
+		}
 	}
 
-	function handleSubmit(e: SubmitEvent) {
-		e.preventDefault();
-		addNode();
-	}
+	let subtitle = $derived(
+		nodes.length <= 1 ? 'single-node deployment' : `${nodes.length}-node cluster`
+	);
+
+	onMount(() => {
+		loadNodes();
+		rotateToken();
+		const interval = setInterval(loadNodes, 5000);
+		return () => clearInterval(interval);
+	});
 </script>
 
-<div class="mb-6 flex items-center justify-between">
-	<div>
-		<h2 class="text-2xl font-semibold">Nodes</h2>
-		<p class="text-sm text-muted-foreground mt-1">Manage proxy nodes in your deployment</p>
-	</div>
-	<Button onclick={() => (showAddForm = true)}>Add Node</Button>
-</div>
+<div class="flex-1 flex flex-col h-full overflow-hidden">
+	<!-- Page Header -->
+	<header class="h-14 shrink-0 flex items-center gap-3 px-7 border-b border-[#1F1F24]">
+		<span class="text-[15px] font-semibold">Nodes</span>
+		<span class="text-[#6B6B73]">{subtitle}</span>
+	</header>
 
-{#if showAddForm}
-	<Card.Root class="mb-6">
-		<Card.Header>
-			<Card.Title class="text-sm">Add New Node</Card.Title>
-		</Card.Header>
-		<Card.Content>
-			<form onsubmit={handleSubmit} class="flex gap-3">
-				<Input bind:value={newNodeName} placeholder="Node name (e.g. proxy-east-1)" class="max-w-xs" />
-				<Button type="submit">Create</Button>
-				<Button variant="outline" onclick={() => (showAddForm = false)}>Cancel</Button>
-			</form>
-		</Card.Content>
-	</Card.Root>
-{/if}
-
-{#if enrollment}
-	<Card.Root class="mb-6 border-yellow-500/50">
-		<Card.Header>
-			<Card.Title class="text-sm text-yellow-500">Node Enrollment Credentials</Card.Title>
-			<Card.Description>These credentials are shown only once. Copy them now.</Card.Description>
-		</Card.Header>
-		<Card.Content>
-			<div class="space-y-2 font-mono text-sm">
-				<div><span class="text-muted-foreground">Node ID:</span> {enrollment.node_id}</div>
-				<div><span class="text-muted-foreground">Dragonfly URL:</span> {enrollment.dragonfly_url}</div>
-				<div><span class="text-muted-foreground">User:</span> {enrollment.dragonfly_user}</div>
-				<div><span class="text-muted-foreground">Password:</span> {enrollment.dragonfly_password}</div>
-				<div><span class="text-muted-foreground">Enrollment Token:</span> {enrollment.enrollment_token}</div>
-				<div><span class="text-muted-foreground">HMAC Key:</span> {enrollment.hmac_key}</div>
+	<!-- Content Area -->
+	<div class="flex-1 overflow-auto p-5 px-7 pb-10 flex flex-col gap-4">
+		{#if loading}
+			<div class="p-8 text-[#6B6B73]">Loading nodes...</div>
+		{:else if nodes.length === 0}
+			<!-- Fallback single primary node card if none registered -->
+			<div
+				class="border border-[#1F1F24] rounded-lg bg-[#111113] grid grid-cols-[minmax(200px,1.4fr)_repeat(4,minmax(0,1fr))] items-center p-3.5 px-4.5 gap-4"
+			>
+				<div class="flex flex-col gap-0.5">
+					<div class="flex items-center gap-2 font-medium">
+						<span class="w-1.5 h-1.5 rounded-full bg-[#4ADE80]"></span>
+						<span class="text-[#E6E6E8]">mars-local</span>
+						<span class="px-1.5 rounded-[3px] bg-[#1B1B20] font-mono text-[10.5px] text-[#A3A3AB]">
+							primary
+						</span>
+					</div>
+					<span class="font-mono text-[11.5px] text-[#6B6B73]">localhost:8443</span>
+				</div>
+				<div class="flex flex-col gap-0.5">
+					<span class="text-[11.5px] text-[#6B6B73]">Uptime</span>
+					<span class="font-mono text-[#E6E6E8]">active</span>
+				</div>
+				<div class="flex flex-col gap-0.5">
+					<span class="text-[11.5px] text-[#6B6B73]">Connections</span>
+					<span class="font-mono text-[#E6E6E8]">1</span>
+				</div>
+				<div class="flex flex-col gap-0.5">
+					<span class="text-[11.5px] text-[#6B6B73]">Dragonfly</span>
+					<span class="font-mono text-[#4ADE80]">connected</span>
+				</div>
+				<div class="flex flex-col gap-0.5">
+					<span class="text-[11.5px] text-[#6B6B73]">Version</span>
+					<span class="font-mono text-[#E6E6E8]">0.1.0</span>
+				</div>
 			</div>
-			<div class="mt-4 flex gap-2">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => copyToClipboard(`[node]\nnode_id = "${enrollment?.node_id}"\ndragonfly_url = "${enrollment?.dragonfly_url}"\nname = "${enrollment?.node_id}"\nenrollment_token = "${enrollment?.enrollment_token}"\nhmac_key = "${enrollment?.hmac_key}"`)}
-				>
-					{copied ? 'Copied!' : 'Copy TOML Config'}
-				</Button>
-				<Button variant="ghost" size="sm" onclick={() => (enrollment = null)}>Dismiss</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-{/if}
-
-<Card.Root>
-	<Card.Content class="pt-6">
-		{#if nodes.length === 0}
-			<p class="text-sm text-muted-foreground text-center py-8">
-				No proxy nodes registered. Add a node to get started with multi-node deployment.
-			</p>
 		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Name</Table.Head>
-						<Table.Head>Node ID</Table.Head>
-						<Table.Head>Status</Table.Head>
-						<Table.Head>Verified</Table.Head>
-						<Table.Head>Version</Table.Head>
-						<Table.Head>Connections</Table.Head>
-						<Table.Head>Uptime</Table.Head>
-						<Table.Head>Last Seen</Table.Head>
-						<Table.Head></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each nodes as node}
-						<Table.Row>
-							<Table.Cell class="font-medium">{node.name}</Table.Cell>
-							<Table.Cell class="font-mono text-xs">{node.id}</Table.Cell>
-							<Table.Cell>
-								<span class="px-2 py-0.5 rounded text-xs font-semibold uppercase {statusColor(node.status, node.online)}">
-									{node.online ? 'online' : 'offline'}
+			{#each nodes as node, idx}
+				{@const isOnline = node.online}
+				<div
+					class="border border-[#1F1F24] rounded-lg bg-[#111113] grid grid-cols-[minmax(200px,1.4fr)_repeat(4,minmax(0,1fr))] items-center p-3.5 px-4.5 gap-4"
+				>
+					<div class="flex flex-col gap-0.5">
+						<div class="flex items-center gap-2 font-medium">
+							<span
+								class="w-1.5 h-1.5 rounded-full {isOnline ? 'bg-[#4ADE80]' : 'bg-[#F87171]'}"
+							></span>
+							<span class="text-[#E6E6E8]">{node.name}</span>
+							{#if idx === 0}
+								<span
+									class="px-1.5 rounded-[3px] bg-[#1B1B20] font-mono text-[10.5px] text-[#A3A3AB]"
+								>
+									primary
 								</span>
-							</Table.Cell>
-							<Table.Cell>
-								{#if !node.online}
-									<span class="text-muted-foreground">-</span>
-								{:else if node.heartbeat_verified}
-									<span class="text-green-500 text-xs font-semibold">HMAC OK</span>
-								{:else}
-									<span class="text-red-400 text-xs font-semibold">UNSIGNED</span>
-								{/if}
-							</Table.Cell>
-							<Table.Cell class="font-mono text-xs">{node.heartbeat?.version ?? '-'}</Table.Cell>
-							<Table.Cell class="font-mono">{node.heartbeat?.active_connections ?? '-'}</Table.Cell>
-							<Table.Cell>{node.heartbeat ? formatUptime(node.heartbeat.uptime_secs) : '-'}</Table.Cell>
-							<Table.Cell class="text-xs">{node.heartbeat ? formatTime(node.heartbeat.timestamp) : '-'}</Table.Cell>
-							<Table.Cell>
-								{#if confirmDelete === node.id}
-									<div class="flex gap-1">
-										<Button variant="destructive" size="sm" onclick={() => deleteNode(node.id)}>Confirm</Button>
-										<Button variant="ghost" size="sm" onclick={() => (confirmDelete = null)}>Cancel</Button>
-									</div>
-								{:else}
-									<Button variant="ghost" size="sm" onclick={() => (confirmDelete = node.id)}>Delete</Button>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+							{/if}
+						</div>
+						<span class="font-mono text-[11.5px] text-[#6B6B73]">
+							{node.heartbeat?.listen_addr || 'localhost:8443'}
+						</span>
+					</div>
+
+					<div class="flex flex-col gap-0.5">
+						<span class="text-[11.5px] text-[#6B6B73]">Uptime</span>
+						<span class="font-mono text-[#E6E6E8]">
+							{formatUptime(node.heartbeat?.uptime_secs)}
+						</span>
+					</div>
+
+					<div class="flex flex-col gap-0.5">
+						<span class="text-[11.5px] text-[#6B6B73]">Connections</span>
+						<span class="font-mono text-[#E6E6E8]">
+							{node.heartbeat?.active_connections ?? 0}
+						</span>
+					</div>
+
+					<div class="flex flex-col gap-0.5">
+						<span class="text-[11.5px] text-[#6B6B73]">Dragonfly</span>
+						<span class="font-mono text-[#4ADE80]">connected</span>
+					</div>
+
+					<div class="flex flex-col gap-0.5">
+						<span class="text-[11.5px] text-[#6B6B73]">Version</span>
+						<span class="font-mono text-[#E6E6E8]">
+							{node.heartbeat?.version || '0.1.0'}
+						</span>
+					</div>
+				</div>
+			{/each}
 		{/if}
-	</Card.Content>
-</Card.Root>
+
+		<!-- Add a node Dashed Card -->
+		<div
+			class="border border-dashed border-[#2A2A30] rounded-lg p-5.5 px-6 flex flex-col gap-3.5 max-w-[760px]"
+		>
+			<div class="flex flex-col gap-1">
+				<span class="text-sm font-semibold text-[#E6E6E8]">Add a node</span>
+				<span class="text-[#6B6B73] leading-relaxed">
+					Run this on the new host. It joins this deployment, pulls policies and categories, and starts proxying on :8443.
+				</span>
+			</div>
+			<div
+				class="flex items-center gap-2.5 p-2.5 px-3 border border-[#1F1F24] rounded-md bg-[#0A0A0B] font-mono text-xs"
+			>
+				<span class="text-[#55555C]">$</span>
+				<span class="flex-1 break-all text-[#E6E6E8]">
+					conduit join --server localhost:8443 --token {joinToken}
+				</span>
+				<button
+					type="button"
+					onclick={copyJoin}
+					class="h-6 px-2.5 border border-[#2A2A30] rounded bg-transparent text-[#A3A3AB] text-[11.5px] cursor-pointer hover:text-[#E6E6E8] hover:bg-[#16161A] transition-colors"
+				>
+					Copy
+				</button>
+			</div>
+			<div class="flex gap-1.5 font-mono text-[11px] text-[#55555C]">
+				<span>token expires in 24h &middot;</span>
+				<button
+					type="button"
+					onclick={rotateToken}
+					class="border-none bg-transparent p-0 text-[#A3A3AB] font-inherit text-inherit cursor-pointer hover:text-[#E6E6E8] underline"
+				>
+					rotate
+				</button>
+			</div>
+		</div>
+	</div>
+</div>

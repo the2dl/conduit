@@ -118,8 +118,96 @@ impl ClearGateProxy {
         ("unknown".into(), 80)
     }
 
+    #[allow(dead_code)]
     fn build_block_page(&self, host: &str, category: &str, reason: &str) -> Bytes {
         Bytes::from(crate::service::build_block_html(host, category, reason, &self.config))
+    }
+
+    fn render_threat_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+        reason_text: &str,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+        let category = ctx.category.as_deref().unwrap_or("malicious");
+
+        let block_ctx = crate::block_page::BlockPageContext::for_threat(
+            &ctx.host,
+            path,
+            method,
+            reason_text,
+            Some(category),
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
+    }
+
+    fn render_policy_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+        let category = ctx.category.as_deref().unwrap_or("uncategorized");
+        let rule_name = ctx.rule_name.as_deref().unwrap_or("Policy");
+
+        let block_ctx = crate::block_page::BlockPageContext::for_policy(
+            &ctx.host,
+            path,
+            method,
+            Some(rule_name),
+            Some(category),
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
+    }
+
+    fn render_dlp_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+        let rule_name = ctx.dlp_matches.as_ref()
+            .and_then(|m| m.first())
+            .map(|s| s.as_str())
+            .unwrap_or("Sensitive Data");
+        let snippet = ctx.dlp_matched_snippet.as_deref();
+
+        let block_ctx = crate::block_page::BlockPageContext::for_dlp(
+            &ctx.host,
+            path,
+            method,
+            rule_name,
+            snippet,
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
     }
 
     /// Get timeout config values or defaults.
@@ -303,20 +391,6 @@ impl ProxyHttp for ClearGateProxy {
             ctx.mitm_client_addr = mitm_client_addr;
             ctx.is_connect = false;
 
-            if tunnel_killed {
-                let body = self.build_block_page(&ctx.host, "threat-detected", "Tunnel terminated (threat detected)");
-                let mut resp = ResponseHeader::build(403, Some(3))?;
-                resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
-                resp.insert_header("Content-Length", &body.len().to_string())?;
-                resp.insert_header("Connection", "close")?;
-                session.write_response_header(Box::new(resp), false).await?;
-                session.write_response_body(Some(body), true).await?;
-                ctx.response_status = 403;
-                ctx.action = PolicyAction::Block;
-                ctx.block_reason = Some(BlockReason::ThreatHeuristic);
-                return Ok(true);
-            }
-
             let (host, _) = Self::extract_host_port(session);
             ctx.host = host;
             ctx.port = mitm_port;
@@ -329,6 +403,20 @@ impl ProxyHttp for ClearGateProxy {
             };
 
             ctx.category = mitm_category;
+
+            if tunnel_killed {
+                let body = self.render_threat_block_page(session, ctx, "Tunnel terminated (threat detected)");
+                let mut resp = ResponseHeader::build(403, Some(3))?;
+                resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                resp.insert_header("Content-Length", &body.len().to_string())?;
+                resp.insert_header("Connection", "close")?;
+                session.write_response_header(Box::new(resp), false).await?;
+                session.write_response_body(Some(body), true).await?;
+                ctx.response_status = 403;
+                ctx.action = PolicyAction::Block;
+                ctx.block_reason = Some(BlockReason::ThreatHeuristic);
+                return Ok(true);
+            }
         } else {
             ctx.client_ip = session
                 .downstream_session
@@ -402,6 +490,8 @@ impl ProxyHttp for ClearGateProxy {
             ctx.category = policy::categories::lookup_category(&self.pool, &ctx.host).await;
         }
 
+        let rt_cfg = crate::runtime_config::get();
+
         // Threat detection
         if let Some(ref engine) = self.threat_engine {
             let verdict = crate::threat::evaluate_request(
@@ -416,28 +506,70 @@ impl ProxyHttp for ClearGateProxy {
             );
 
             let rep_block = crate::threat::check_reputation(engine, &ctx.host);
-            let should_block = verdict.blocked || rep_block.is_some();
+            let is_threat = verdict.blocked || rep_block.is_some();
 
-            if should_block {
+            if is_threat {
                 let score = rep_block.unwrap_or(verdict.score);
-                ctx.action = PolicyAction::Block;
-                ctx.block_reason = Some(if rep_block.is_some() {
+                let block_reason = if rep_block.is_some() {
                     BlockReason::ThreatReputation
                 } else {
                     BlockReason::ThreatHeuristic
-                });
-                ctx.threat_verdict = Some(conduit_common::types::ThreatVerdict {
-                    score,
-                    blocked: true,
-                    ..verdict
-                });
+                };
                 let reason_text = if rep_block.is_some() {
                     "Threat detected (reputation)"
                 } else {
                     "Threat detected (heuristic)"
                 };
-                debug!(host = %ctx.host, score, "Blocking request (threat detected)");
-                let body = self.build_block_page(&ctx.host, "threat-detected", reason_text);
+
+                ctx.threat_verdict = Some(conduit_common::types::ThreatVerdict {
+                    score,
+                    blocked: rt_cfg.prevention_mode,
+                    ..verdict
+                });
+
+                if rt_cfg.prevention_mode {
+                    ctx.action = PolicyAction::Block;
+                    ctx.block_reason = Some(block_reason);
+                    debug!(host = %ctx.host, score, "Blocking request (threat detected)");
+                    let body = self.render_threat_block_page(session, ctx, reason_text);
+                    let mut resp = ResponseHeader::build(403, Some(3))?;
+                    resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                    resp.insert_header("Content-Length", &body.len().to_string())?;
+                    resp.insert_header("Connection", "close")?;
+                    session
+                        .write_response_header(Box::new(resp), false)
+                        .await?;
+                    session.write_response_body(Some(body), true).await?;
+                    ctx.response_status = 403;
+                    return Ok(true);
+                } else {
+                    ctx.action = PolicyAction::Log;
+                    debug!(host = %ctx.host, score, "Threat detected in audit mode (not blocked)");
+                }
+            } else {
+                ctx.threat_verdict = Some(verdict);
+            }
+        }
+
+        // Policy evaluation
+        let (action, rule_id, matched_rule_name) = policy::rules::evaluate(
+            &self.pool,
+            &ctx.host,
+            ctx.category.as_deref(),
+            ctx.identity.username.as_deref(),
+            &ctx.identity.groups,
+            rt_cfg.fail_closed,
+        )
+        .await;
+        ctx.rule_id = rule_id;
+        ctx.rule_name = matched_rule_name;
+
+        if action == PolicyAction::Block {
+            if rt_cfg.prevention_mode {
+                ctx.action = PolicyAction::Block;
+                ctx.block_reason = Some(BlockReason::Policy);
+                debug!(host = %ctx.host, category = ?ctx.category, "Blocking request");
+                let body = self.render_policy_block_page(session, ctx);
                 let mut resp = ResponseHeader::build(403, Some(3))?;
                 resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
                 resp.insert_header("Content-Length", &body.len().to_string())?;
@@ -448,46 +580,11 @@ impl ProxyHttp for ClearGateProxy {
                 session.write_response_body(Some(body), true).await?;
                 ctx.response_status = 403;
                 return Ok(true);
+            } else {
+                ctx.action = PolicyAction::Log;
             }
-            ctx.threat_verdict = Some(verdict);
-        }
-
-        // Policy evaluation
-        let (action, rule_id, matched_rule_name) = policy::rules::evaluate(
-            &self.pool,
-            &ctx.host,
-            ctx.category.as_deref(),
-            ctx.identity.username.as_deref(),
-            &ctx.identity.groups,
-            self.config.fail_closed,
-        )
-        .await;
-        ctx.action = action;
-        ctx.rule_id = rule_id;
-        ctx.rule_name = matched_rule_name;
-
-        if ctx.action == PolicyAction::Block {
-            ctx.block_reason = Some(BlockReason::Policy);
-            let reason_text = match ctx.rule_name {
-                Some(ref name) => format!("Policy rule: {name}"),
-                None => "Policy".to_string(),
-            };
-            debug!(host = %ctx.host, category = ?ctx.category, "Blocking request");
-            let body = self.build_block_page(
-                &ctx.host,
-                ctx.category.as_deref().unwrap_or("uncategorized"),
-                &reason_text,
-            );
-            let mut resp = ResponseHeader::build(403, Some(3))?;
-            resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
-            resp.insert_header("Content-Length", &body.len().to_string())?;
-            resp.insert_header("Connection", "close")?;
-            session
-                .write_response_header(Box::new(resp), false)
-                .await?;
-            session.write_response_body(Some(body), true).await?;
-            ctx.response_status = 403;
-            return Ok(true);
+        } else if ctx.action != PolicyAction::Log {
+            ctx.action = action;
         }
 
         // DLP buffer is lazily allocated in request_body_filter on first body chunk
@@ -643,15 +740,14 @@ impl ProxyHttp for ClearGateProxy {
                                 .map(|m| m.pattern_name.clone())
                                 .collect();
                             ctx.dlp_matches = Some(pattern_names);
+                            if let Some(snippet) = matches.iter().find_map(|m| m.matched_snippet.as_ref()) {
+                                ctx.dlp_matched_snippet = Some(snippet.clone());
+                            }
 
                             if crate::dlp::DlpEngine::should_block(&matches) {
                                 ctx.action = PolicyAction::Block;
                                 ctx.block_reason = Some(BlockReason::DlpViolation);
-                                let patterns = ctx.dlp_matches.as_ref()
-                                    .map(|p| p.join(", "))
-                                    .unwrap_or_default();
-                                let reason = format!("Data loss prevention: {patterns}");
-                                let body = self.build_block_page(&ctx.host, "dlp-violation", &reason);
+                                let body = self.render_dlp_block_page(session, ctx);
                                 let mut resp = ResponseHeader::build(403, Some(3))?;
                                 resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
                                 resp.insert_header("Content-Length", &body.len().to_string())?;
@@ -998,7 +1094,7 @@ impl ProxyHttp for ClearGateProxy {
         }
 
         let entry = LogEntry {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: ctx.req_id.clone(),
             timestamp: ctx.start_time,
             client_ip: ctx.client_ip.clone(),
             username: ctx.identity.username.clone(),
@@ -1020,8 +1116,8 @@ impl ProxyHttp for ClearGateProxy {
             upstream_addr: ctx.upstream_addr.clone(),
             content_type: ctx.response_content_type.clone(),
             cache_status: ctx.cache_status.clone(),
-            node_id: None,
-            node_name: None,
+            node_id: self.config.node.as_ref().map(|n| n.node_id.clone()),
+            node_name: Some(crate::block_page::get_node_name(&self.config)),
             threat_score: ctx.threat_verdict.as_ref().map(|v| v.score),
             threat_tier: ctx.threat_verdict.as_ref().map(|v| v.tier_reached),
             threat_blocked: ctx.threat_verdict.as_ref().map(|v| v.blocked),

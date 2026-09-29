@@ -75,6 +75,15 @@ pub mod keys {
     /// Config hash
     pub const CONFIG: &str = "cleargate:config";
 
+    /// Policy hit counters: HINCRBY cleargate:stats:policy_hits {rule_id} 1
+    pub const STATS_POLICY_HITS: &str = "cleargate:stats:policy_hits";
+
+    /// DLP hit counters: HINCRBY cleargate:stats:dlp_hits {pattern_name} 1
+    pub const STATS_DLP_HITS: &str = "cleargate:stats:dlp_hits";
+
+    /// Set of manually added domain categories
+    pub const CATEGORIES_MANUAL: &str = "cleargate:categories:manual";
+
     // --- Multi-node keys ---
 
     /// Node registration hash: HSET cleargate:nodes:{id}

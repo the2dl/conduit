@@ -152,12 +152,22 @@ fn normalize_confusables(s: &str) -> String {
 // Individual heuristic checks
 // ---------------------------------------------------------------------------
 
-/// Extract the registrable domain part (without TLD) for entropy analysis.
+/// Extract the registrable domain label (SLD without TLD) for entropy analysis.
 fn domain_without_tld(host: &str) -> &str {
     let host = host.strip_suffix('.').unwrap_or(host);
-    match host.rsplit_once('.') {
-        Some((rest, _tld)) => rest,
-        None => host,
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() >= 3 {
+        let second_to_last = parts[parts.len() - 2];
+        if ["co", "com", "org", "net", "edu", "gov"].contains(&second_to_last)
+            && parts[parts.len() - 1].len() == 2
+        {
+            return parts[parts.len() - 3];
+        }
+    }
+    if parts.len() >= 2 {
+        parts[parts.len() - 2]
+    } else {
+        host
     }
 }
 

@@ -192,6 +192,7 @@ mod tests {
             users: vec![],
             groups: vec![],
             action: PolicyAction::Block,
+            hits: 0,
         };
 
         assert!(matches_rule(&rule, "facebook.com", Some("social"), None, &[]));
@@ -211,6 +212,7 @@ mod tests {
             users: vec![],
             groups: vec![],
             action: PolicyAction::Block,
+            hits: 0,
         };
 
         assert!(matches_rule(&rule, "sub.example.com", None, None, &[]));
@@ -233,6 +235,7 @@ mod tests {
             users: vec![],
             groups: vec![],
             action: PolicyAction::Log,
+            hits: 0,
         };
 
         assert!(matches_rule(&rule, "anything.com", None, None, &[]));

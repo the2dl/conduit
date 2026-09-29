@@ -54,7 +54,8 @@ pub async fn handle_connect_tunnel(
     http_proxy: Arc<HttpProxy<ClearGateProxy>>,
     shutdown: ShutdownWatch,
 ) {
-    if config.tls_intercept {
+    let tls_intercept = crate::runtime_config::get().tls_intercept;
+    if tls_intercept {
         // MITM: TLS accept on client side, then route through Pingora pipeline
         handle_mitm(
             downstream, host, port, cert_cache,
@@ -185,7 +186,8 @@ pub async fn serve_block_page(
     downstream: Stream,
     host: &str,
     cert_cache: &CertCache,
-    block_html: &str,
+    mut context: crate::block_page::BlockPageContext<'_>,
+    custom_template: Option<&str>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -195,9 +197,13 @@ pub async fn serve_block_page(
 
     let mut reader = BufReader::new(downstream_tls);
 
+    let mut req_method = String::new();
+    let mut req_path = String::new();
+
     // Read and discard the client's HTTP request headers (with size + time limits)
     let header_read = async {
         let mut total_header_bytes = 0usize;
+        let mut first_line = true;
         loop {
             let mut line = Vec::new();
             match reader.read_until(b'\n', &mut line).await {
@@ -206,6 +212,18 @@ pub async fn serve_block_page(
                     total_header_bytes += line.len();
                     if line.len() > MAX_HEADER_LINE || total_header_bytes > MAX_BLOCK_PAGE_HEADERS {
                         return false;
+                    }
+                    if first_line {
+                        first_line = false;
+                        if let Ok(line_str) = std::str::from_utf8(&line) {
+                            let mut parts = line_str.split_whitespace();
+                            if let Some(m) = parts.next() {
+                                req_method = m.to_string();
+                            }
+                            if let Some(p) = parts.next() {
+                                req_path = p.to_string();
+                            }
+                        }
                     }
                     if line == b"\r\n" || line == b"\n" {
                         return true;
@@ -221,6 +239,15 @@ pub async fn serve_block_page(
         Ok(false) => return, // oversized or connection closed
         Err(_) => return,    // timed out (slow client)
     }
+
+    if !req_method.is_empty() {
+        context.method = &req_method;
+    }
+    if !req_path.is_empty() {
+        context.path = &req_path;
+    }
+
+    let block_html = context.render(custom_template);
 
     // Send HTTP response with block page
     let response = format!(

@@ -40,6 +40,7 @@ pub struct DlpMatch {
     #[allow(dead_code)]
     pub pattern_name: String,
     pub action: DlpAction,
+    pub matched_snippet: Option<String>,
 }
 
 /// Inner engine holding compiled patterns. Swapped atomically via ArcSwap.
@@ -137,10 +138,12 @@ impl DlpEngine {
 
         let mut matches = Vec::new();
         for pattern in &inner.patterns {
-            if pattern.regex.is_match(text) {
+            if let Some(mat) = pattern.regex.find(text) {
+                let snippet = crate::block_page::mask_sensitive(mat.as_str());
                 matches.push(DlpMatch {
                     pattern_name: pattern.name.clone(),
                     action: pattern.action,
+                    matched_snippet: Some(snippet),
                 });
                 // Early exit: if this pattern blocks, no need to check remaining patterns
                 if pattern.action == DlpAction::Block {
@@ -337,6 +340,7 @@ mod tests {
                 action: DlpRuleAction::Log,
                 enabled: true,
                 builtin: false,
+                hits: 0,
             },
             DlpRule {
                 id: "2".into(),
@@ -345,6 +349,7 @@ mod tests {
                 action: DlpRuleAction::Block,
                 enabled: false,
                 builtin: false,
+                hits: 0,
             },
         ];
         let patterns = compile_from_rules(&rules);

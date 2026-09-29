@@ -29,10 +29,21 @@ async fn list_rules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .await
         .unwrap_or_default();
 
+    let hits_map: std::collections::HashMap<String, u64> = conn
+        .hgetall(keys::STATS_DLP_HITS)
+        .await
+        .unwrap_or_default();
+
     let mut rules: Vec<DlpRule> = raw
         .values()
-        .filter_map(|s| serde_json::from_str(s).ok())
+        .filter_map(|s| serde_json::from_str::<DlpRule>(s).ok())
         .collect();
+
+    for r in &mut rules {
+        if let Some(&h) = hits_map.get(&r.id).or_else(|| hits_map.get(&r.name)) {
+            r.hits = h;
+        }
+    }
 
     rules.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -68,6 +79,7 @@ async fn create_rule(
         action: input.action,
         enabled: input.enabled,
         builtin: false,
+        hits: 0,
     };
 
     let Ok(mut conn) = state.pool.get().await else {
@@ -144,6 +156,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             action: DlpRuleAction::Log,
             enabled: true,
             builtin: true,
+            hits: 0,
         },
         DlpRule {
             id: "builtin-credit-card".into(),
@@ -152,6 +165,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             action: DlpRuleAction::Log,
             enabled: true,
             builtin: true,
+            hits: 0,
         },
         DlpRule {
             id: "builtin-aws-key".into(),
@@ -160,6 +174,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             action: DlpRuleAction::Log,
             enabled: true,
             builtin: true,
+            hits: 0,
         },
     ];
 

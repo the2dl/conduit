@@ -373,7 +373,7 @@ fn format_csv_row(e: &LogEntry) -> String {
 // ---------------------------------------------------------------------------
 
 /// Parse Redis XREVRANGE/XRANGE response into (stream_id, LogEntry) pairs.
-fn parse_stream_entries(raw: &[redis::Value]) -> Vec<(String, LogEntry)> {
+pub fn parse_stream_entries(raw: &[redis::Value]) -> Vec<(String, LogEntry)> {
     let mut result = Vec::new();
 
     for item in raw {

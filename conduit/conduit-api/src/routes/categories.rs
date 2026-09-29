@@ -65,6 +65,7 @@ async fn list_categories(
                     entries.push(CategoryEntry {
                         domain: domain.clone(),
                         category: cat,
+                        source: "feed".to_string(),
                     });
                 }
             }
@@ -121,6 +122,7 @@ async fn list_categories(
                 entries.push(CategoryEntry {
                     domain,
                     category: cat,
+                    source: "feed".to_string(),
                 });
                 if entries.len() >= limit {
                     break;
@@ -134,6 +136,11 @@ async fn list_categories(
         if entries.len() >= limit || scan_cursor == 0 || iterations >= max_iterations {
             break;
         }
+    }
+
+    for e in &mut entries {
+        let is_manual: bool = conn.sismember(keys::CATEGORIES_MANUAL, &e.domain).await.unwrap_or(false);
+        e.source = if is_manual { "manual".to_string() } else { "feed".to_string() };
     }
 
     // Estimate total via DBSIZE (rough, includes non-category keys)
@@ -168,6 +175,7 @@ async fn add_category(
 
     let key = keys::domain_category(&entry.domain);
     let _: () = conn.set(&key, &entry.category).await.unwrap_or(());
+    let _: () = conn.sadd(keys::CATEGORIES_MANUAL, &entry.domain).await.unwrap_or(());
     super::publish_reload(&state.pool, "categories").await;
     StatusCode::CREATED
 }
@@ -187,6 +195,7 @@ async fn delete_category(
 
     let key = keys::domain_category(&q.domain);
     let _: () = conn.del(&key).await.unwrap_or(());
+    let _: () = conn.srem(keys::CATEGORIES_MANUAL, &q.domain).await.unwrap_or(());
     super::publish_reload(&state.pool, "categories").await;
     StatusCode::NO_CONTENT
 }

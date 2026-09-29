@@ -20,10 +20,21 @@ async fn list_policies(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         .await
         .unwrap_or_default();
 
-    let rules: Vec<PolicyRule> = raw
+    let hits_map: std::collections::HashMap<String, u64> = conn
+        .hgetall(keys::STATS_POLICY_HITS)
+        .await
+        .unwrap_or_default();
+
+    let mut rules: Vec<PolicyRule> = raw
         .iter()
-        .filter_map(|s| serde_json::from_str(s).ok())
+        .filter_map(|s| serde_json::from_str::<PolicyRule>(s).ok())
         .collect();
+
+    for r in &mut rules {
+        if let Some(&h) = hits_map.get(&r.id) {
+            r.hits = h;
+        }
+    }
 
     (StatusCode::OK, Json(rules))
 }

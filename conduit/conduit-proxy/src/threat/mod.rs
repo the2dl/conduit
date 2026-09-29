@@ -166,11 +166,13 @@ pub fn evaluate_request(
         ip_reputation::is_bad_ip(&cidrs, ip)
     });
 
+    let rt_cfg = crate::runtime_config::get();
+
     // Heuristics — no reputation input
     let (mut score, mut signals) = heuristics::evaluate_all(
         host, port, path, scheme, category,
         None, // no reputation — deterministic
-        config.dga_entropy_threshold,
+        rt_cfg.dga_threshold,
         bloom_hit, nrd_hit, ip_bad,
         cert_meta,
         sec_headers,
@@ -209,7 +211,11 @@ pub fn evaluate_request(
         debug!(host, t0_score, t1_score, "Tier 1 escalation");
     }
 
-    let blocked = score >= config.tier0_block_threshold;
+    let has_dga = signals.iter().any(|s| s.name == "dga_entropy");
+    let dga_block = rt_cfg.dga_prevention && has_dga;
+    let threat_block = (rt_cfg.threat_prevention && score >= rt_cfg.threat_block_threshold)
+        || score >= config.tier0_block_threshold;
+    let blocked = dga_block || threat_block;
 
     ThreatVerdict {
         score,
