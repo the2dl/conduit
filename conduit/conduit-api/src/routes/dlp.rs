@@ -176,10 +176,182 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             builtin: true,
             hits: 0,
         },
+        DlpRule {
+            id: "builtin-npm-token".into(),
+            name: "NPM Access Token".into(),
+            regex: r"(?:\bnpm_[A-Za-z0-9]{32,40}\b|(?://registry\.npmjs\.org/:)?_authToken=[A-Za-z0-9_-]{32,})".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-pypi-token".into(),
+            name: "PyPI API Token".into(),
+            regex: r"\bpypi-[A-Za-z0-9_-]{50,}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-rubygems-key".into(),
+            name: "RubyGems API Key".into(),
+            regex: r"\brubygems_[a-f0-9]{48}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-crates-token".into(),
+            name: "Cargo / Crates.io Token".into(),
+            regex: r"\bcio[a-zA-Z0-9]{32}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-github-pat".into(),
+            name: "GitHub Personal Access Token".into(),
+            regex: r"\b(?:ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82})\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-github-oauth".into(),
+            name: "GitHub OAuth / App Token".into(),
+            regex: r"\b(?:gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-gitlab-pat".into(),
+            name: "GitLab Access Token".into(),
+            regex: r"\bglpat-[0-9a-zA-Z_-]{20,22}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-private-key".into(),
+            name: "Private Key (PEM/SSH/PGP)".into(),
+            regex: r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY(?: BLOCK)?-----".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-aws-secret".into(),
+            name: "AWS Secret Access Key".into(),
+            regex: r#"(?i)(?:aws_secret_access_key|aws_secret_key)\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}["']?"#.into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-gcp-api-key".into(),
+            name: "Google Cloud API Key".into(),
+            regex: r"\bAIza[0-9A-Za-z\-_]{35}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-gcp-sa-key".into(),
+            name: "Google Cloud Service Account Key".into(),
+            regex: r#"(?i)"type":\s*"service_account"|"private_key_id":\s*"[0-9a-f]{40}""#.into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-azure-connection-string".into(),
+            name: "Azure Connection String".into(),
+            regex: r"(?i)DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{86,88}".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-vault-token".into(),
+            name: "HashiCorp Vault Token".into(),
+            regex: r"\b[sb]\.[a-zA-Z0-9]{24,}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-db-credentials".into(),
+            name: "Database URI with Password".into(),
+            regex: r"(?i)(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]*:[^@\s/]+@[^\s/]+".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-env-secret-export".into(),
+            name: "Password / Secret Env Export".into(),
+            regex: r#"(?i)\b(?:export\s+)?(?:DB_PASSWORD|PASSWORD|PASSWD|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)\s*=\s*["']?[^"'\s]{8,}["']?"#.into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-openai-key".into(),
+            name: "OpenAI API Key".into(),
+            regex: r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-anthropic-key".into(),
+            name: "Anthropic API Key".into(),
+            regex: r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-slack-token".into(),
+            name: "Slack Token".into(),
+            regex: r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
+        DlpRule {
+            id: "builtin-discord-webhook".into(),
+            name: "Discord Webhook Exfiltration".into(),
+            regex: r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+        },
     ];
 
     let Ok(mut conn) = pool.get().await else { return };
 
+    let mut any_inserted = false;
     for rule in &builtins {
         let exists: bool = conn
             .hexists(keys::DLP_RULES, &rule.id)
@@ -188,7 +360,12 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
         if !exists {
             let json = serde_json::to_string(rule).unwrap();
             let _: () = conn.hset(keys::DLP_RULES, &rule.id, &json).await.unwrap_or(());
+            any_inserted = true;
         }
+    }
+
+    if any_inserted {
+        super::publish_reload(pool, "dlp").await;
     }
 }
 

@@ -18,6 +18,7 @@ export interface DlpDraft {
 	pattern: string;
 	action: 'log' | 'block' | 'redact';
 	sample: string;
+	builtin?: boolean;
 }
 
 const DEFAULT_SAMPLE = 'invoice PROJ-204918 paid with 4111 1111 1111 1111\nkey=AKIAIOSFODNN7EXAMPLE ssn 078-05-1120';
@@ -111,7 +112,8 @@ export const drawer = {
 			pattern: preset?.pattern ?? 'PROJ-\\d{6}',
 			action: preset?.action ?? 'log',
 			sample: preset?.sample ?? DEFAULT_SAMPLE,
-			id: preset?.id
+			id: preset?.id,
+			builtin: preset?.builtin ?? false
 		};
 		activeSheet = 'dlp';
 	},
@@ -186,7 +188,7 @@ export const drawer = {
 					regex: dlpDraft.pattern.trim(),
 					action: dlpDraft.action,
 					enabled: true,
-					builtin: false
+					builtin: dlpDraft.builtin ?? false
 				});
 			} else {
 				await api.dlp.create({

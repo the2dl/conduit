@@ -40,7 +40,8 @@
 			id: rule.id,
 			name: rule.name,
 			pattern: rule.regex,
-			action: rule.action
+			action: rule.action,
+			builtin: rule.builtin
 		});
 	}
 
