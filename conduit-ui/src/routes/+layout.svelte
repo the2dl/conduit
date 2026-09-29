@@ -10,6 +10,7 @@
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import logo from '$lib/assets/conduit-lockup-on-dark.svg';
 
 	let { children } = $props();
 
@@ -31,9 +32,9 @@
 
 <div class="flex h-screen">
 	<aside class="w-60 shrink-0 border-r border-border bg-sidebar flex flex-col">
-		<div class="p-5">
-			<h1 class="text-xl font-bold bg-gradient-to-br from-primary to-pink-400 bg-clip-text text-transparent">conduit</h1>
-			<div class="text-[0.7rem] text-muted-foreground uppercase tracking-widest mt-1">proxy</div>
+		<div class="px-5 py-5 flex flex-col gap-1">
+			<img src={logo} alt="Conduit" class="h-6 w-auto object-contain object-left" />
+			<div class="text-[0.68rem] text-muted-foreground uppercase tracking-wider font-medium">Security Gateway</div>
 		</div>
 		<Separator />
 		<nav class="flex-1 p-3 flex flex-col gap-1">
