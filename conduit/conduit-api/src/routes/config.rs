@@ -17,6 +17,7 @@ const ALLOWED_CONFIG_KEYS: &[&str] = &[
     "log_retention",
     "syslog_target",
     "block_page_html",
+    "prevention_mode",
 ];
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
