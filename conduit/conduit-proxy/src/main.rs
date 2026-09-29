@@ -20,6 +20,7 @@ mod runtime_config;
 mod service;
 mod stats;
 mod threat;
+mod package_scanner;
 
 use arc_swap::ArcSwap;
 use conduit_common::ca::CertAuthority;
@@ -303,6 +304,11 @@ fn main() -> anyhow::Result<()> {
             .expect("Failed to spawn connection cleanup thread");
     }
 
+    // Initialize package security scanner (YARA-X)
+    let package_scanner = config.package_scanner.as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| Arc::new(package_scanner::PackageScanner::new(c)));
+
     // Create the Pingora HttpProxy for handling plain HTTP requests
     let deps = ProxyDeps {
         config: config.clone(),
@@ -315,6 +321,7 @@ fn main() -> anyhow::Result<()> {
         dns_cache: dns_cache.clone(),
         upstream_router: upstream_router.clone(),
         dlp_engine: dlp_engine.clone(),
+        package_scanner: package_scanner.clone(),
     };
     let proxy_inner = ClearGateProxy::new(deps);
     let mut pingora_proxy_instance = http_proxy(&server.configuration, proxy_inner);

@@ -55,6 +55,12 @@ pub struct RequestContext {
     pub dlp_matches: Option<Vec<String>>,
     /// Masked snippet of DLP match for display on block pages.
     pub dlp_matched_snippet: Option<String>,
+    /// Buffer for package security scanning of inbound package archive bodies.
+    pub package_body_buffer: Option<Vec<u8>>,
+    /// Whether this request is an identified package archive download.
+    pub is_package_download: bool,
+    /// YARA / supply chain threat match details if detected: (rule_name, infected_file).
+    pub package_threat_match: Option<(String, String)>,
 }
 
 impl RequestContext {
@@ -99,6 +105,9 @@ impl RequestContext {
             lb_routed: false,
             dlp_matches: None,
             dlp_matched_snippet: None,
+            package_body_buffer: None,
+            is_package_download: false,
+            package_threat_match: None,
         }
     }
 

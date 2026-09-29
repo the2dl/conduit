@@ -103,6 +103,7 @@ pub enum BlockReason {
     RateLimited,
     ConnectionLimit,
     DlpViolation,
+    PackageMalware,
 }
 
 impl std::fmt::Display for BlockReason {

@@ -83,6 +83,9 @@ pub struct ClearGateConfig {
     /// HTTP/2 downstream configuration.
     #[serde(default)]
     pub downstream: Option<DownstreamConfig>,
+    /// Package Security & Supply Chain Scanning with YARA-X.
+    #[serde(default)]
+    pub package_scanner: Option<PackageScannerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +288,7 @@ impl Default for ClearGateConfig {
             metrics: None,
             load_balancing: None,
             dlp: None,
+            package_scanner: None,
             downstream: None,
         }
     }
@@ -525,6 +529,30 @@ pub struct DownstreamConfig {
 
 fn default_h2_max_streams() -> usize { 100 }
 fn default_h2_window() -> u32 { 65535 }
+
+/// Package Security & Supply Chain Scanning configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageScannerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Action on malware match: "block" or "log".
+    #[serde(default = "default_package_action")]
+    pub action: String,
+    /// Max archive size to buffer & scan (default 15MB).
+    #[serde(default = "default_package_max_size")]
+    pub max_package_size: usize,
+    /// Max size per script file inside archive to scan (default 2MB).
+    #[serde(default = "default_package_max_file_size")]
+    pub max_file_scan_size: usize,
+    /// Optional path to custom YARA rules file or directory.
+    #[serde(default)]
+    pub custom_rules_path: Option<String>,
+}
+
+fn default_package_action() -> String { "block".into() }
+fn default_package_max_size() -> usize { 15 * 1024 * 1024 }
+fn default_package_max_file_size() -> usize { 2 * 1024 * 1024 }
 
 impl ClearGateConfig {
     pub fn from_file(path: &str) -> anyhow::Result<Self> {

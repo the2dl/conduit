@@ -94,6 +94,7 @@ fnv = "1"
 futures = "0.3"
 brotli = "7"
 zstd = "0.13"
+yara-x = "=1.21.0"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }

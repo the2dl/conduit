@@ -130,6 +130,13 @@ enabled = true
 max_scan_size = 1048576               # 1MB scan limit
 action = "log"                        # Log/audit mode rather than block
 
+# --- In-line Package Security & Supply Chain Scanner (YARA-X) ---
+[package_scanner]
+enabled = true
+action = "block"                      # "block" or "log"
+max_package_size = 31457280           # 30MB max package archive size
+max_file_scan_size = 2097152          # 2MB max per extracted script/manifest
+
 # --- HTTP/2 Downstream ---
 [downstream]
 h2c = true

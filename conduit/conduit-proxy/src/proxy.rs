@@ -49,6 +49,7 @@ pub struct ProxyDeps {
     pub dns_cache: Option<Arc<crate::dns_cache::DnsCache>>,
     pub upstream_router: Option<Arc<crate::load_balancer::UpstreamRouter>>,
     pub dlp_engine: Option<Arc<crate::dlp::DlpEngine>>,
+    pub package_scanner: Option<Arc<crate::package_scanner::PackageScanner>>,
 }
 
 /// Core proxy struct implementing Pingora's ProxyHttp trait.
@@ -70,6 +71,7 @@ pub struct ClearGateProxy {
     pub dns_cache: Option<Arc<crate::dns_cache::DnsCache>>,
     pub upstream_router: Option<Arc<crate::load_balancer::UpstreamRouter>>,
     pub dlp_engine: Option<Arc<crate::dlp::DlpEngine>>,
+    pub package_scanner: Option<Arc<crate::package_scanner::PackageScanner>>,
 }
 
 impl ClearGateProxy {
@@ -89,6 +91,7 @@ impl ClearGateProxy {
             dns_cache: deps.dns_cache,
             upstream_router: deps.upstream_router,
             dlp_engine: deps.dlp_engine,
+            package_scanner: deps.package_scanner,
         }
     }
 
@@ -201,6 +204,35 @@ impl ClearGateProxy {
             method,
             rule_name,
             snippet,
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
+    }
+
+    #[allow(dead_code)]
+    fn render_package_threat_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+        rule_name: &str,
+        infected_file: &str,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+
+        let block_ctx = crate::block_page::BlockPageContext::for_package_threat(
+            &ctx.host,
+            path,
+            method,
+            rule_name,
+            infected_file,
             Some(user),
             &ctx.client_ip,
             &timestamp,
@@ -779,7 +811,10 @@ impl ProxyHttp for ClearGateProxy {
             let lb_domain = self.upstream_router.as_ref()
                 .map(|r| r.matches_domain(&ctx.host))
                 .unwrap_or(false);
-            if !ctx.is_connect && !lb_domain && filters::request_cacheable(session.req_header()) {
+            let is_pkg = self.package_scanner.as_ref()
+                .map(|s| s.enabled && crate::package_scanner::PackageScanner::is_package_download(&ctx.host, &ctx.path, None))
+                .unwrap_or(false);
+            if !ctx.is_connect && !lb_domain && !is_pkg && filters::request_cacheable(session.req_header()) {
                 session.cache.enable(
                     storage,
                     self.cache_eviction,
@@ -943,6 +978,24 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
+        // Package Security Scanner (YARA-X) — detect package downloads and prepare buffer
+        if let Some(ref scanner) = self.package_scanner {
+            if scanner.enabled
+                && crate::package_scanner::PackageScanner::is_package_download(
+                    &ctx.host,
+                    &ctx.path,
+                    ctx.response_content_type.as_deref(),
+                )
+            {
+                ctx.is_package_download = true;
+                ctx.package_body_buffer = Some(Vec::with_capacity(65536));
+                if ctx.cache_enabled {
+                    session.cache.disable(NoCacheReason::Custom("package_scan"));
+                    ctx.cache_enabled = false;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -969,6 +1022,32 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
+        // Package Security Scanner buffering
+        if ctx.is_package_download {
+            if let Some(b) = body.take() {
+                if let Some(ref mut buf) = ctx.package_body_buffer {
+                    let max = self
+                        .package_scanner
+                        .as_ref()
+                        .map(|s| s.max_package_size)
+                        .unwrap_or(15 * 1024 * 1024);
+                    if buf.len() + b.len() > max {
+                        // Package exceeds max inspection size: release buffered prefix and let it stream
+                        let mut full = std::mem::take(buf);
+                        full.extend_from_slice(&b);
+                        *body = Some(Bytes::from(full));
+                        ctx.package_body_buffer = None;
+                        ctx.is_package_download = false;
+                    } else {
+                        buf.extend_from_slice(&b);
+                        *body = None;
+                    }
+                } else {
+                    *body = Some(b);
+                }
+            }
+        }
+
         if let Some(ref client_addr) = ctx.mitm_client_addr {
             let ct = ctx.response_content_type.as_deref();
             if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr) {
@@ -977,6 +1056,49 @@ impl ProxyHttp for ClearGateProxy {
         }
 
         if end_of_stream {
+            if ctx.is_package_download {
+                if let Some(buf) = ctx.package_body_buffer.take() {
+                    if let Some(ref scanner) = self.package_scanner {
+                        let scan_result = scanner.scan_tarball(&buf);
+                        match scan_result {
+                            crate::package_scanner::PackageScanResult::Threat(threat) => {
+                                tracing::warn!(
+                                    host = %ctx.host,
+                                    path = %ctx.path,
+                                    rule = %threat.rule_name,
+                                    infected_file = %threat.infected_file,
+                                    action = ?scanner.action,
+                                    "Package supply-chain threat detected"
+                                );
+                                ctx.package_threat_match = Some((threat.rule_name.clone(), threat.infected_file.clone()));
+                                if scanner.action == crate::package_scanner::PackageScanAction::Block {
+                                    ctx.action = PolicyAction::Block;
+                                    ctx.block_reason = Some(BlockReason::PackageMalware);
+                                    ctx.response_status = 403;
+                                    if ctx.rule_name.is_none() {
+                                        ctx.rule_name = Some(format!("yara:{}", threat.rule_name));
+                                    }
+                                    *body = None;
+                                    return Err(pingora_core::Error::explain(
+                                        pingora_core::ErrorType::HTTPStatus(403),
+                                        format!(
+                                            "Package download blocked: {} ({}) in {}",
+                                            threat.description, threat.rule_name, threat.infected_file
+                                        ),
+                                    ));
+                                } else {
+                                    *body = Some(Bytes::from(buf));
+                                }
+                            }
+                            crate::package_scanner::PackageScanResult::Clean => {
+                                *body = Some(Bytes::from(buf));
+                            }
+                        }
+                    } else {
+                        *body = Some(Bytes::from(buf));
+                    }
+                }
+            }
             if let Some(buf) = ctx.threat_inspect_buffer.take() {
                 if !buf.is_empty() {
                     let (t2_score, t2_signals) = crate::threat::content::analyze_response(

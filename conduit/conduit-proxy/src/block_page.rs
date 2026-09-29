@@ -110,6 +110,44 @@ impl<'a> BlockPageContext<'a> {
         }
     }
 
+    /// Factory for supply chain / package malware blocks (YARA-X matches).
+    pub fn for_package_threat(
+        host: &'a str,
+        path: &'a str,
+        method: &'a str,
+        rule_name: &'a str,
+        infected_file: &'a str,
+        user: Option<&'a str>,
+        client_ip: &'a str,
+        timestamp: &'a str,
+        ref_id: &'a str,
+        node: &'a str,
+    ) -> Self {
+        Self {
+            reason_type: "threat",
+            eyebrow: "Supply chain malware detected",
+            title: "Compromised package download blocked",
+            message: "Conduit detected malicious code or suspicious lifecycle scripts inside this package archive using YARA-X supply chain rules. The infected package was not downloaded.",
+            method: if method.is_empty() { "GET" } else { method },
+            host,
+            path: if path.is_empty() { "/" } else { path },
+            detail_1_label: "YARA Rule",
+            detail_1_value: if rule_name.is_empty() { "Supply Chain Threat" } else { rule_name },
+            detail_2_label: "File",
+            detail_2_value: if infected_file.is_empty() { "package archive" } else { infected_file },
+            user: match user {
+                Some(u) if !u.is_empty() => u,
+                _ => "unknown",
+            },
+            client_ip,
+            timestamp,
+            request_url: "#",
+            request_label: "Report a false positive",
+            ref_id,
+            node,
+        }
+    }
+
     /// Factory for category/policy blocks (e.g. gambling, social media, adult content).
     pub fn for_policy(
         host: &'a str,
@@ -385,6 +423,31 @@ mod tests {
         assert!(html.contains("AWS Access Key"));
         assert!(html.contains("AKIA••••••••••••7Q2L"));
         assert!(html.contains("Request an exception"));
+        assert!(!html.contains("{{"));
+    }
+
+    #[test]
+    fn test_render_package_threat_block() {
+        let ctx = BlockPageContext::for_package_threat(
+            "registry.npmjs.org",
+            "/keyv/-/keyv-4.5.4.tgz",
+            "GET",
+            "npm_shai_hulud_dropper",
+            "package/Math_Symbol.js",
+            Some("dan"),
+            "10.0.4.18",
+            "2026-09-29 16:30:00",
+            "cnd-pkg-9912",
+            "conduit-01",
+        );
+
+        let html = ctx.render(None);
+        assert!(html.contains("Supply chain malware detected"));
+        assert!(html.contains("Compromised package download blocked"));
+        assert!(html.contains("npm_shai_hulud_dropper"));
+        assert!(html.contains("package/Math_Symbol.js"));
+        assert!(html.contains("registry.npmjs.org"));
+        assert!(html.contains("/keyv/-/keyv-4.5.4.tgz"));
         assert!(!html.contains("{{"));
     }
 

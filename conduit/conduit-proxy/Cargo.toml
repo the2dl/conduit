@@ -75,6 +75,8 @@ reqwest = { workspace = true }
 flate2 = { workspace = true }
 brotli = { workspace = true }
 zstd = { workspace = true }
+tar = { workspace = true }
+yara-x = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.6"
