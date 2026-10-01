@@ -49,7 +49,8 @@ impl ServerApp for ClearGateService {
 
         // Connection limit check — extract client IP from socket digest.
         // Stream is Box<dyn IO> which requires GetSocketDigest, so we can call it directly.
-        let client_ip = stream.get_socket_digest()
+        let client_ip = stream
+            .get_socket_digest()
             .and_then(|d| d.peer_addr().map(|a| a.to_string()))
             .unwrap_or_default();
 
@@ -88,7 +89,12 @@ impl ServerApp for ClearGateService {
 
         // H2C: if downstream speaks cleartext HTTP/2 and h2c is enabled, let Pingora handle it
         if is_h2_preface {
-            let h2c_enabled = self.config.downstream.as_ref().map(|d| d.h2c).unwrap_or(false);
+            let h2c_enabled = self
+                .config
+                .downstream
+                .as_ref()
+                .map(|d| d.h2c)
+                .unwrap_or(false);
             if h2c_enabled {
                 debug!("H2C connection detected, delegating to Pingora");
                 let result = self.http_proxy.process_new(stream, shutdown).await;
@@ -133,7 +139,8 @@ impl ClearGateService {
         let req_header = session.req_header();
         let target = if let Some(auth) = req_header.uri.authority() {
             auth.as_str()
-        } else if let Some(host_hdr) = req_header.headers.get("Host").and_then(|h| h.to_str().ok()) {
+        } else if let Some(host_hdr) = req_header.headers.get("Host").and_then(|h| h.to_str().ok())
+        {
             host_hdr
         } else {
             std::str::from_utf8(req_header.raw_path()).unwrap_or("")
@@ -147,7 +154,8 @@ impl ClearGateService {
             .rsplit_once(':')
             .map(|(_, p)| format!(":{p}"))
             .unwrap_or_default();
-        let normalized_ip = crate::proxy::normalize_client_ip(crate::proxy::extract_ip_from_addr(&client_ip_raw));
+        let normalized_ip =
+            crate::proxy::normalize_client_ip(crate::proxy::extract_ip_from_addr(&client_ip_raw));
         let client_ip = format!("{normalized_ip}{port_suffix}");
 
         debug!(host = %host, port, "CONNECT request");
@@ -168,7 +176,8 @@ impl ClearGateService {
 
         // Fall back to IP mapping or local OS user
         if username.is_none() {
-            let identity = crate::identity::resolve_client_identity(&self.pool, &client_ip_raw).await;
+            let identity =
+                crate::identity::resolve_client_identity(&self.pool, &client_ip_raw).await;
             if identity.username.is_some() {
                 username = identity.username;
                 auth_method = identity.auth_method;
@@ -185,71 +194,145 @@ impl ClearGateService {
             return None;
         }
 
+        let is_allowlisted = self
+            .config
+            .allowlist
+            .as_ref()
+            .map(|a| a.is_allowed(&host, port, None, Some(&client_ip)))
+            .unwrap_or(false);
+
         // Rate limiting for CONNECT
         if let Some(ref limiter) = self.rate_limiter {
             let ip_only = crate::proxy::extract_ip_from_addr(&client_ip);
-            if let Err(_kind) = limiter.check_rate(
-                ip_only,
-                username.as_deref(),
-                &host,
-            ) {
+            if let Err(_kind) = limiter.check_rate(ip_only, username.as_deref(), &host) {
                 crate::metrics::record_rate_limit();
                 info!(host = %host, client_ip = %client_ip, "CONNECT rate limited");
                 let mut resp = ResponseHeader::build(429, Some(1)).unwrap();
-                resp.insert_header("Retry-After", &limiter.window_secs().to_string()).ok();
+                resp.insert_header("Retry-After", &limiter.window_secs().to_string())
+                    .ok();
                 let _ = session.write_response_header(Box::new(resp)).await;
                 return None;
             }
         }
 
-        // Policy + threat evaluation
+        // Policy evaluation
         let category = policy::categories::lookup_category(&self.pool, &host).await;
+        let rt_cfg = crate::runtime_config::get();
 
-        let mut threat_blocked = false;
-        let mut rep_blocked = false;
-        let mut threat_verdict: Option<conduit_common::types::ThreatVerdict> = None;
-        if let Some(ref engine) = self.threat_engine {
-            let verdict = crate::threat::evaluate_request(
-                engine, &host, port, "/", "https",
-                category.as_deref(), None, None, None,
-            );
-            threat_blocked = verdict.blocked;
+        let (action, rule_id, matched_rule_name) = if is_allowlisted {
+            (PolicyAction::Allow, None, Some("Allowlist".to_string()))
+        } else {
+            policy::rules::evaluate(
+                &self.pool,
+                &host,
+                category.as_deref(),
+                username.as_deref(),
+                &[],
+                rt_cfg.fail_closed,
+            )
+            .await
+        };
 
-            if !threat_blocked {
-                if let Some(rep_score) = crate::threat::check_reputation(engine, &host) {
-                    threat_blocked = true;
-                    rep_blocked = true;
-                    threat_verdict = Some(conduit_common::types::ThreatVerdict {
-                        score: rep_score,
-                        blocked: true,
-                        tier_reached: conduit_common::types::ThreatTier::Tier2,
-                        signals: verdict.signals.clone(),
-                        reputation_score: Some(rep_score),
-                    });
+        // Explicit allow rules (from operator policies or allowlist) override general egress port restrictions
+        let is_explicitly_allowed =
+            is_allowlisted || (action == PolicyAction::Allow && rule_id.is_some());
+
+        // Egress port restriction check (allowlisted or explicitly policy-allowed destinations bypass this)
+        if !is_explicitly_allowed {
+            if let Some(ref egress) = self.config.egress {
+                if !egress.is_connect_port_allowed(port) {
+                    info!(host = %host, port, client_ip = %client_ip, "CONNECT rejected: port not permitted by egress policy");
+                    let resp = ResponseHeader::build(403, Some(1)).unwrap();
+                    let _ = session.write_response_header(Box::new(resp)).await;
+
+                    let node_name = crate::block_page::get_node_name(&self.config);
+                    let entry = LogEntry {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        timestamp: chrono::Utc::now(),
+                        client_ip: client_ip.clone(),
+                        username: username.clone(),
+                        auth_method,
+                        method: "CONNECT".into(),
+                        scheme: "https".into(),
+                        host: host.clone(),
+                        port,
+                        path: "/".into(),
+                        full_url: format!("https://{host}:{port}/"),
+                        category: category.clone(),
+                        action: PolicyAction::Block,
+                        rule_id: None,
+                        status_code: 403,
+                        request_bytes: 0,
+                        response_bytes: 0,
+                        duration_ms: 0,
+                        tls_intercepted: false,
+                        upstream_addr: None,
+                        content_type: None,
+                        cache_status: None,
+                        node_id: self.config.node.as_ref().map(|n| n.node_id.clone()),
+                        node_name: Some(node_name),
+                        threat_score: None,
+                        threat_tier: None,
+                        threat_blocked: None,
+                        block_reason: Some(BlockReason::Policy),
+                        rule_name: Some("EgressPortRestriction".to_string()),
+                        threat_signals: None,
+                        dlp_matches: None,
+                    };
+                    self.log_tx.send(entry);
+                    return None;
                 }
-            }
-
-            if threat_verdict.is_none() {
-                threat_verdict = Some(verdict);
             }
         }
 
-        let rt_cfg = crate::runtime_config::get();
+        // Threat evaluation (skipped for allowlisted hosts)
+        let mut threat_blocked = false;
+        let mut rep_blocked = false;
+        let mut threat_verdict: Option<conduit_common::types::ThreatVerdict> = None;
+        if !is_allowlisted {
+            if let Some(ref engine) = self.threat_engine {
+                let verdict = crate::threat::evaluate_request(
+                    engine,
+                    &host,
+                    port,
+                    "/",
+                    "https",
+                    category.as_deref(),
+                    None,
+                    None,
+                    None,
+                );
+                threat_blocked = verdict.blocked;
 
-        let (action, rule_id, matched_rule_name) = policy::rules::evaluate(
-            &self.pool,
-            &host,
-            category.as_deref(),
-            username.as_deref(),
-            &[],
-            rt_cfg.fail_closed,
-        )
-        .await;
+                if !threat_blocked {
+                    if let Some(rep_score) = crate::threat::check_reputation(engine, &host) {
+                        threat_blocked = true;
+                        rep_blocked = true;
+                        threat_verdict = Some(conduit_common::types::ThreatVerdict {
+                            score: rep_score,
+                            blocked: true,
+                            tier_reached: conduit_common::types::ThreatTier::Tier2,
+                            signals: verdict.signals.clone(),
+                            reputation_score: Some(rep_score),
+                        });
+                    }
+                }
 
-        let should_block = (threat_blocked || action == PolicyAction::Block) && rt_cfg.prevention_mode;
+                if threat_verdict.is_none() {
+                    threat_verdict = Some(verdict);
+                }
+            }
+        }
+
+        let should_block =
+            (threat_blocked || action == PolicyAction::Block) && rt_cfg.prevention_mode;
         if should_block {
             let block_reason = if threat_blocked {
-                if rep_blocked { BlockReason::ThreatReputation } else { BlockReason::ThreatHeuristic }
+                if rep_blocked {
+                    BlockReason::ThreatReputation
+                } else {
+                    BlockReason::ThreatHeuristic
+                }
             } else {
                 BlockReason::Policy
             };
@@ -329,7 +412,8 @@ impl ClearGateService {
 
             let threat_score = threat_verdict.as_ref().map(|v| v.score);
             let threat_tier = threat_verdict.as_ref().map(|v| v.tier_reached);
-            let threat_signals = threat_verdict.as_ref()
+            let threat_signals = threat_verdict
+                .as_ref()
                 .filter(|v| !v.signals.is_empty())
                 .map(|v| v.signals.clone());
             let entry = LogEntry {
@@ -435,6 +519,11 @@ fn parse_host_port(s: &str, default_port: u16) -> (String, u16) {
 }
 
 #[allow(dead_code)]
-pub(crate) fn build_block_html(host: &str, category: &str, reason: &str, config: &ClearGateConfig) -> String {
+pub(crate) fn build_block_html(
+    host: &str,
+    category: &str,
+    reason: &str,
+    config: &ClearGateConfig,
+) -> String {
     crate::block_page::build_block_html(host, category, reason, config)
 }

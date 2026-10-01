@@ -13,6 +13,7 @@ mod logging;
 mod metrics;
 mod mitm;
 mod node;
+mod package_scanner;
 mod policy;
 mod proxy;
 mod rate_limit;
@@ -20,7 +21,6 @@ mod runtime_config;
 mod service;
 mod stats;
 mod threat;
-mod package_scanner;
 
 use arc_swap::ArcSwap;
 use conduit_common::ca::CertAuthority;
@@ -35,7 +35,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::logging::LogSender;
 use crate::mitm::cert_cache::CertCache;
-use crate::proxy::{ClearGateProxy, ProxyDeps, CacheComponents};
+use crate::proxy::{CacheComponents, ClearGateProxy, ProxyDeps};
 use crate::service::ClearGateService;
 
 fn main() -> anyhow::Result<()> {
@@ -48,8 +48,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     // Load ClearGate config from file or defaults
-    let config_path =
-        std::env::var("CONDUIT_CONFIG").unwrap_or_else(|_| "conduit.toml".into());
+    let config_path = std::env::var("CONDUIT_CONFIG").unwrap_or_else(|_| "conduit.toml".into());
     let config = if std::path::Path::new(&config_path).exists() {
         ClearGateConfig::from_file(&config_path)?
     } else {
@@ -66,8 +65,7 @@ fn main() -> anyhow::Result<()> {
         .as_ref()
         .map(|n| n.dragonfly_url.as_str())
         .unwrap_or(&config.dragonfly_url);
-    let pool =
-        conduit_common::redis::create_pool(dragonfly_url, config.redis_pool_size)?;
+    let pool = conduit_common::redis::create_pool(dragonfly_url, config.redis_pool_size)?;
     let pool = Arc::new(pool);
 
     // Verify Dragonfly connectivity (fail fast on bad credentials)
@@ -79,6 +77,9 @@ fn main() -> anyhow::Result<()> {
         if let Err(e) = rt.block_on(conduit_common::redis::verify_connection(&pool_check)) {
             error!("Dragonfly connection check failed: {e}");
             std::process::exit(1);
+        }
+        if let Some(ref notif) = config.notifications {
+            runtime_config::set_static_muted_domains(notif.muted_domains.clone());
         }
         // Initialize dynamic runtime configuration from Redis
         rt.block_on(runtime_config::reload(&pool_check));
@@ -107,7 +108,9 @@ fn main() -> anyhow::Result<()> {
                     info!("No CA in Dragonfly or on disk, generating new CA");
                     CertAuthority::generate()?
                 };
-                if let Err(e) = rt.block_on(conduit_common::ca::store_ca_to_dragonfly(&pool_ref, &ca)) {
+                if let Err(e) =
+                    rt.block_on(conduit_common::ca::store_ca_to_dragonfly(&pool_ref, &ca))
+                {
                     warn!("Failed to persist CA to Dragonfly: {e}");
                 } else {
                     info!("CA persisted to Dragonfly for multi-node sync");
@@ -128,14 +131,18 @@ fn main() -> anyhow::Result<()> {
     // Honor TOML workers config (defaults to available CPUs via num_cpus())
     if let Some(conf) = Arc::get_mut(&mut server.configuration) {
         conf.threads = config.workers;
-        info!(threads = config.workers, "Configured Pingora worker threads");
+        info!(
+            threads = config.workers,
+            "Configured Pingora worker threads"
+        );
     }
 
     // Apply shutdown config to Pingora's server configuration before bootstrap
     if let Some(ref shutdown_cfg) = config.shutdown {
         if let Some(conf) = Arc::get_mut(&mut server.configuration) {
             conf.grace_period_seconds = Some(shutdown_cfg.grace_period_secs);
-            conf.graceful_shutdown_timeout_seconds = Some(shutdown_cfg.graceful_shutdown_timeout_secs);
+            conf.graceful_shutdown_timeout_seconds =
+                Some(shutdown_cfg.graceful_shutdown_timeout_secs);
             conf.upgrade_sock = shutdown_cfg.upgrade_sock.clone();
             conf.pid_file = shutdown_cfg.pid_file.clone();
             if shutdown_cfg.daemon {
@@ -181,7 +188,10 @@ fn main() -> anyhow::Result<()> {
 
     // Initialize HTTP response cache if configured
     {
-        let dict_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../pingora/pingora-proxy/tests/headers.dict");
+        let dict_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../pingora/pingora-proxy/tests/headers.dict"
+        );
         if std::path::Path::new(dict_path).exists() {
             if !pingora_cache::set_compression_dict_path(dict_path) {
                 tracing::warn!("Failed to load cache compression dictionary from {dict_path}");
@@ -193,13 +203,13 @@ fn main() -> anyhow::Result<()> {
 
     let cache = if config.cache.as_ref().map(|c| c.enabled).unwrap_or(false) {
         let cache_cfg = config.cache.as_ref().unwrap();
-        info!("HTTP response cache enabled (max_size={}MB, max_file={}MB)",
+        info!(
+            "HTTP response cache enabled (max_size={}MB, max_file={}MB)",
             cache_cfg.max_cache_size / 1_048_576,
-            cache_cfg.max_file_size / 1_048_576);
+            cache_cfg.max_file_size / 1_048_576
+        );
 
-        let storage: &'static _ = Box::leak(Box::new(
-            pingora_cache::MemCache::new(),
-        ));
+        let storage: &'static _ = Box::leak(Box::new(pingora_cache::MemCache::new()));
 
         let estimated_items = cache_cfg.max_cache_size / 65_536;
         let eviction: &'static _ = Box::leak(Box::new(
@@ -209,38 +219,37 @@ fn main() -> anyhow::Result<()> {
             ),
         ));
 
-        let lock: &'static _ = Box::leak(Box::new(
-            pingora_cache::lock::CacheLock::new(
-                std::time::Duration::from_secs(cache_cfg.lock_timeout_secs),
-            ),
-        ));
+        let lock: &'static _ = Box::leak(Box::new(pingora_cache::lock::CacheLock::new(
+            std::time::Duration::from_secs(cache_cfg.lock_timeout_secs),
+        )));
 
         let swr = cache_cfg.stale_while_revalidate_secs;
         let sie = cache_cfg.stale_if_error_secs;
-        let defaults: &'static _ = Box::leak(Box::new(
-            pingora_cache::CacheMetaDefaults::new(
-                |status| {
-                    use http::StatusCode;
-                    match status {
-                        StatusCode::OK | StatusCode::NON_AUTHORITATIVE_INFORMATION
-                        | StatusCode::MOVED_PERMANENTLY | StatusCode::NOT_FOUND
-                        | StatusCode::METHOD_NOT_ALLOWED | StatusCode::GONE => {
-                            Some(std::time::Duration::from_secs(3600))
-                        }
-                        StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => {
-                            Some(std::time::Duration::from_secs(3600))
-                        }
-                        _ => None,
+        let defaults: &'static _ = Box::leak(Box::new(pingora_cache::CacheMetaDefaults::new(
+            |status| {
+                use http::StatusCode;
+                match status {
+                    StatusCode::OK
+                    | StatusCode::NON_AUTHORITATIVE_INFORMATION
+                    | StatusCode::MOVED_PERMANENTLY
+                    | StatusCode::NOT_FOUND
+                    | StatusCode::METHOD_NOT_ALLOWED
+                    | StatusCode::GONE => Some(std::time::Duration::from_secs(3600)),
+                    StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => {
+                        Some(std::time::Duration::from_secs(3600))
                     }
-                },
-                swr,
-                sie,
-            ),
-        ));
+                    _ => None,
+                }
+            },
+            swr,
+            sie,
+        )));
 
         CacheComponents {
             storage: Some(storage as &'static (dyn pingora_cache::storage::Storage + Sync)),
-            eviction: Some(eviction as &'static (dyn pingora_cache::eviction::EvictionManager + Sync)),
+            eviction: Some(
+                eviction as &'static (dyn pingora_cache::eviction::EvictionManager + Sync),
+            ),
             lock: Some(lock as &'static pingora_cache::lock::CacheKeyLockImpl),
             meta_defaults: Some(defaults as &'static pingora_cache::CacheMetaDefaults),
             max_file_size: cache_cfg.max_file_size,
@@ -250,42 +259,48 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Initialize rate limiter
-    let rate_limiter = config.rate_limit.as_ref()
+    let rate_limiter = config
+        .rate_limit
+        .as_ref()
         .filter(|c| c.enabled)
         .map(|c| Arc::new(rate_limit::RateLimiter::new(c)));
 
     // Initialize DNS cache
-    let dns_cache = config.dns.as_ref()
+    let dns_cache = config
+        .dns
+        .as_ref()
         .filter(|c| c.enabled)
         .map(|c| Arc::new(dns_cache::DnsCache::new(c)));
 
     // Initialize upstream router (load balancing)
-    let upstream_router = config.load_balancing.as_ref()
+    let upstream_router = config
+        .load_balancing
+        .as_ref()
         .filter(|c| c.enabled)
         .map(|c| Arc::new(load_balancer::UpstreamRouter::new(c)));
 
     // Initialize DLP engine, then load rules from Dragonfly (falls back to config if unavailable)
-    let dlp_engine = config.dlp.as_ref()
-        .filter(|c| c.enabled)
-        .map(|c| {
-            let engine = Arc::new(dlp::DlpEngine::new(c));
-            // Load rules from Dragonfly (overrides config-based rules if any exist)
-            {
-                let pool_check = pool.clone();
-                let engine_ref = engine.clone();
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("DLP load runtime");
-                rt.block_on(engine_ref.reload_from_dragonfly(&pool_check));
-            }
-            // Register for background reloads via pub/sub
-            dlp::register_for_reload(engine.clone(), pool.clone());
-            engine
-        });
+    let dlp_engine = config.dlp.as_ref().filter(|c| c.enabled).map(|c| {
+        let engine = Arc::new(dlp::DlpEngine::new(c));
+        // Load rules from Dragonfly (overrides config-based rules if any exist)
+        {
+            let pool_check = pool.clone();
+            let engine_ref = engine.clone();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("DLP load runtime");
+            rt.block_on(engine_ref.reload_from_dragonfly(&pool_check));
+        }
+        // Register for background reloads via pub/sub
+        dlp::register_for_reload(engine.clone(), pool.clone());
+        engine
+    });
 
     // Initialize connection tracker
-    let conn_tracker = config.connection_limits.as_ref()
+    let conn_tracker = config
+        .connection_limits
+        .as_ref()
         .filter(|c| c.enabled)
         .map(|c| Arc::new(conn_limit::ConnectionTracker::new(c)));
 
@@ -295,17 +310,17 @@ fn main() -> anyhow::Result<()> {
         let tracker_clone = tracker.clone();
         std::thread::Builder::new()
             .name("conn-cleanup".into())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(60));
-                    tracker_clone.cleanup();
-                }
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                tracker_clone.cleanup();
             })
             .expect("Failed to spawn connection cleanup thread");
     }
 
     // Initialize package security scanner (YARA-X)
-    let package_scanner = config.package_scanner.as_ref()
+    let package_scanner = config
+        .package_scanner
+        .as_ref()
         .filter(|c| c.enabled)
         .map(|c| Arc::new(package_scanner::PackageScanner::new(c)));
 
@@ -343,8 +358,7 @@ fn main() -> anyhow::Result<()> {
         conn_tracker,
     };
 
-    let mut service =
-        ListeningService::new("ClearGate Proxy".to_string(), cleargate);
+    let mut service = ListeningService::new("ClearGate Proxy".to_string(), cleargate);
     service.add_tcp(&config.listen_addr);
 
     info!(addr = %config.listen_addr, "Proxy listening");

@@ -9,8 +9,8 @@
 use conduit_common::types::{ThreatSignal, ThreatTier};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use once_cell::sync::Lazy;
-use std::io::Read;
 use regex::RegexSet;
+use std::io::Read;
 
 // ---------------------------------------------------------------------------
 // JavaScript obfuscation detection
@@ -112,9 +112,13 @@ pub fn detect_phishing_html(body: &[u8], host: &str) -> Vec<ThreatSignal> {
     };
 
     // Fast pre-check: skip regex if no relevant HTML/JS tokens present
-    if !text.contains('<') && !text.contains("sign") && !text.contains("login")
-        && !text.contains("password") && !text.contains("Sign")
-        && !text.contains("Login") && !text.contains("Password")
+    if !text.contains('<')
+        && !text.contains("sign")
+        && !text.contains("login")
+        && !text.contains("password")
+        && !text.contains("Sign")
+        && !text.contains("Login")
+        && !text.contains("Password")
     {
         return vec![];
     }
@@ -412,7 +416,14 @@ pub fn analyze_response(
     status_code: u16,
     location_header: Option<&str>,
 ) -> (f32, Vec<ThreatSignal>) {
-    analyze_response_inner(body, host, content_type, status_code, location_header, false)
+    analyze_response_inner(
+        body,
+        host,
+        content_type,
+        status_code,
+        location_header,
+        false,
+    )
 }
 
 /// Like `analyze_response` but with an explicit brotli hint.
@@ -426,7 +437,14 @@ pub fn analyze_response_with_encoding(
     location_header: Option<&str>,
     content_encoding_br: bool,
 ) -> (f32, Vec<ThreatSignal>) {
-    analyze_response_inner(body, host, content_type, status_code, location_header, content_encoding_br)
+    analyze_response_inner(
+        body,
+        host,
+        content_type,
+        status_code,
+        location_header,
+        content_encoding_br,
+    )
 }
 
 fn analyze_response_inner(
@@ -475,10 +493,7 @@ fn analyze_response_inner(
     all_signals.extend(detect_redirect_chain(status_code, location_header, host));
 
     // Take the max signal score
-    let max_score = all_signals
-        .iter()
-        .map(|s| s.score)
-        .fold(0.0f32, f32::max);
+    let max_score = all_signals.iter().map(|s| s.score).fold(0.0f32, f32::max);
 
     (max_score, all_signals)
 }
@@ -534,34 +549,50 @@ mod tests {
             std::io::Write::write_all(&mut writer, html).unwrap();
         }
         // Raw HTML should not be valid UTF-8... actually it is, but compressed data won't be
-        assert!(std::str::from_utf8(&compressed).is_err(), "compressed data should not be valid UTF-8");
+        assert!(
+            std::str::from_utf8(&compressed).is_err(),
+            "compressed data should not be valid UTF-8"
+        );
 
         let (score, signals) = analyze_response_with_encoding(
-            &compressed, "evil.top", Some("text/html"), 200, None, true,
+            &compressed,
+            "evil.top",
+            Some("text/html"),
+            200,
+            None,
+            true,
         );
         assert!(
             score > 0.0,
             "brotli-compressed phishing HTML should be detected, score={score}, signals={signals:?}"
         );
         let has_phishing = signals.iter().any(|s| s.name.starts_with("phishing_html"));
-        assert!(has_phishing, "should detect phishing patterns after brotli decompression, signals={signals:?}");
+        assert!(
+            has_phishing,
+            "should detect phishing patterns after brotli decompression, signals={signals:?}"
+        );
     }
 
     #[test]
     fn zstd_decompression_phishing() {
         let html = b"<html><body><form method='post'><input type='password' name='pass'>Sign In</form></body></html>";
         let compressed = zstd::encode_all(&html[..], 3).unwrap();
-        assert!(compressed.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]), "should have zstd magic");
-
-        let (score, signals) = analyze_response(
-            &compressed, "evil.top", Some("text/html"), 200, None,
+        assert!(
+            compressed.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]),
+            "should have zstd magic"
         );
+
+        let (score, signals) =
+            analyze_response(&compressed, "evil.top", Some("text/html"), 200, None);
         assert!(
             score > 0.0,
             "zstd-compressed phishing HTML should be detected, score={score}, signals={signals:?}"
         );
         let has_phishing = signals.iter().any(|s| s.name.starts_with("phishing_html"));
-        assert!(has_phishing, "should detect phishing after zstd decompression, signals={signals:?}");
+        assert!(
+            has_phishing,
+            "should detect phishing after zstd decompression, signals={signals:?}"
+        );
     }
 
     #[test]
@@ -574,7 +605,10 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         let (score, _) = analyze_response(&compressed, "evil.top", Some("text/html"), 200, None);
-        assert!(score > 0.0, "gzip-compressed phishing should still be detected");
+        assert!(
+            score > 0.0,
+            "gzip-compressed phishing should still be detected"
+        );
     }
 
     #[test]
@@ -588,7 +622,10 @@ mod tests {
         <script src="/challenge.js"></script><script src="/metrics.js"></script>
         <noscript>Enable JavaScript</noscript></body></html>"#;
         let sigs = detect_thin_page(html);
-        assert!(!sigs.is_empty(), "thin loader shell should flag, got {sigs:?}");
+        assert!(
+            !sigs.is_empty(),
+            "thin loader shell should flag, got {sigs:?}"
+        );
     }
 
     #[test]
@@ -606,6 +643,9 @@ mod tests {
         satisfaction sets us apart from the competition.</p>
         </main><footer>Copyright 2026 Example Inc. All rights reserved.</footer></body></html>"#;
         let sigs = detect_thin_page(html);
-        assert!(sigs.is_empty(), "real page should not flag as thin, got {sigs:?}");
+        assert!(
+            sigs.is_empty(),
+            "real page should not flag as thin, got {sigs:?}"
+        );
     }
 }

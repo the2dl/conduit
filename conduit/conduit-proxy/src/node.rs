@@ -64,7 +64,10 @@ async fn run_node_lifecycle(
     // Verify enrollment token (one-time, consumed on success)
     if let Err(e) = verify_enrollment(&pool, node_id, node_cfg.enrollment_token.as_deref()).await {
         error!(node_id, "Enrollment verification failed: {e}");
-        error!(node_id, "Obtain a valid enrollment_token via POST /api/v1/nodes and add it to [node] config");
+        error!(
+            node_id,
+            "Obtain a valid enrollment_token via POST /api/v1/nodes and add it to [node] config"
+        );
         std::process::exit(1);
     }
 
@@ -88,7 +91,10 @@ async fn run_node_lifecycle(
         base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, k).ok()
     });
     if hmac_key_bytes.is_none() {
-        warn!(node_id, "No hmac_key configured — heartbeats will be unsigned");
+        warn!(
+            node_id,
+            "No hmac_key configured — heartbeats will be unsigned"
+        );
     }
 
     // Heartbeat loop
@@ -126,11 +132,7 @@ async fn run_node_lifecycle(
 
 /// Verify the one-time enrollment token against the value stored by `POST /nodes`.
 /// On success, consumes the token (HDEL) so it can't be replayed.
-async fn verify_enrollment(
-    pool: &Pool,
-    node_id: &str,
-    token: Option<&str>,
-) -> anyhow::Result<()> {
+async fn verify_enrollment(pool: &Pool, node_id: &str, token: Option<&str>) -> anyhow::Result<()> {
     let mut conn = pool.get().await?;
     let key = keys::node(node_id);
 
@@ -146,8 +148,9 @@ async fn verify_enrollment(
     let stored_token = stored_token
         .ok_or_else(|| anyhow::anyhow!("No enrollment record found for node {node_id} — create it via POST /api/v1/nodes first"))?;
 
-    let provided_token = token
-        .ok_or_else(|| anyhow::anyhow!("enrollment_token is required in [node] config for first enrollment"))?;
+    let provided_token = token.ok_or_else(|| {
+        anyhow::anyhow!("enrollment_token is required in [node] config for first enrollment")
+    })?;
 
     if !constant_time_eq(provided_token.as_bytes(), stored_token.as_bytes()) {
         anyhow::bail!("Invalid enrollment token for node {node_id}");
@@ -246,7 +249,10 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str, pool: Arc<Pool>) {
         error!(node_id, "Failed to subscribe to CA reload channel: {e}");
     }
 
-    info!(node_id, "Subscribed to config + threat + CA reload channels");
+    info!(
+        node_id,
+        "Subscribed to config + threat + CA reload channels"
+    );
 
     use tokio_stream::StreamExt;
     let mut msg_stream = pubsub.on_message();
@@ -266,6 +272,18 @@ async fn pubsub_listener(dragonfly_url: &str, node_id: &str, pool: Arc<Pool>) {
             crate::runtime_config::reload(&pool).await;
         }
         if channel == keys::THREAT_RELOAD_CHANNEL {
+            if let Some(origin) = payload.strip_prefix("feeds_updated:") {
+                if origin == node_id {
+                    tracing::trace!(node_id, "Ignoring own feed refresh pub/sub signal");
+                    continue;
+                }
+            } else if payload == "feeds_updated" {
+                tracing::trace!(
+                    node_id,
+                    "Ignoring generic feeds_updated signal to prevent loop"
+                );
+                continue;
+            }
             crate::threat::feeds::trigger_immediate_refresh();
         }
         if channel == keys::CA_RELOAD_CHANNEL {

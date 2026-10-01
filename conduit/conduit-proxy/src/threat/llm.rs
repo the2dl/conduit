@@ -65,8 +65,7 @@ pub fn spawn_llm_worker(
 
             // Update reputation from LLM verdict
             if let Ok(mut conn) = pool.get().await {
-                let rep_key =
-                    conduit_common::redis::keys::threat_reputation(&req.host);
+                let rep_key = conduit_common::redis::keys::threat_reputation(&req.host);
                 let rep_adjustment = match verdict.action {
                     LlmAction::Block => (verdict.confidence * 0.3).min(0.3),
                     LlmAction::Allow => -(verdict.confidence * 0.1).min(0.1),
@@ -90,7 +89,11 @@ pub fn spawn_llm_worker(
 }
 
 /// Build the prompt and call the LLM API.
-async fn evaluate_llm(config: &ThreatConfig, client: &reqwest::Client, req: &LlmRequest) -> LlmVerdict {
+async fn evaluate_llm(
+    config: &ThreatConfig,
+    client: &reqwest::Client,
+    req: &LlmRequest,
+) -> LlmVerdict {
     let signal_list: String = req
         .signals
         .iter()

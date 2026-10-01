@@ -285,7 +285,8 @@ pub fn build_block_html(
     let ref_id = generate_ref_id();
     let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let is_dlp = category == "dlp-violation" || reason.to_lowercase().contains("data loss prevention");
+    let is_dlp =
+        category == "dlp-violation" || reason.to_lowercase().contains("data loss prevention");
     let is_threat = category == "threat-detected" || reason.to_lowercase().contains("threat");
 
     let context = if is_dlp {
@@ -312,7 +313,11 @@ pub fn build_block_html(
             "/",
             "GET",
             reason,
-            Some(if category == "threat-detected" { "malicious" } else { category }),
+            Some(if category == "threat-detected" {
+                "malicious"
+            } else {
+                category
+            }),
             None,
             "127.0.0.1",
             &timestamp,
@@ -477,7 +482,10 @@ mod tests {
 
     #[test]
     fn test_mask_sensitive() {
-        assert_eq!(mask_sensitive("AKIAIOSFODNN7EXAMPLE"), "AKIA••••••••••••MPLE");
+        assert_eq!(
+            mask_sensitive("AKIAIOSFODNN7EXAMPLE"),
+            "AKIA••••••••••••MPLE"
+        );
         assert_eq!(mask_sensitive("4111222233334444"), "4111••••••••••••4444");
         assert_eq!(mask_sensitive("secret12"), "se••••12");
         assert_eq!(mask_sensitive("short"), "••••••••");

@@ -55,19 +55,35 @@ pub async fn handle_connect_tunnel(
     shutdown: ShutdownWatch,
 ) {
     let tls_intercept = crate::runtime_config::get().tls_intercept;
-    if tls_intercept {
+    let is_allowlisted = config
+        .allowlist
+        .as_ref()
+        .map(|a| a.is_allowed(&host, port, None, Some(&client_ip)))
+        .unwrap_or(false);
+
+    if tls_intercept && !is_allowlisted {
         // MITM: TLS accept on client side, then route through Pingora pipeline
         handle_mitm(
-            downstream, host, port, cert_cache,
-            &client_ip, category, username, auth_method,
-            http_proxy, shutdown,
-        ).await;
+            downstream,
+            host,
+            port,
+            cert_cache,
+            &client_ip,
+            category,
+            username,
+            auth_method,
+            http_proxy,
+            shutdown,
+        )
+        .await;
     } else {
         // Passthrough: DNS resolve + TCP connect + bidirectional copy
         let addr = format!("{host}:{port}");
         let start = chrono::Utc::now();
 
-        let ip_ver = config.dns.as_ref()
+        let ip_ver = config
+            .dns
+            .as_ref()
             .map(|d| IpVersion::from_config(&d.ip_version))
             .unwrap_or(IpVersion::V4Preferred);
 
@@ -89,7 +105,13 @@ pub async fn handle_connect_tunnel(
             return;
         };
 
-        if is_private_ip(resolved_addr.ip()) {
+        let is_allowed_ip = config
+            .allowlist
+            .as_ref()
+            .map(|a| a.is_allowed(&host, port, Some(resolved_addr.ip()), Some(&client_ip)))
+            .unwrap_or(false);
+
+        if !is_allowed_ip && is_private_ip(resolved_addr.ip()) {
             warn!(addr = %addr, resolved = %resolved_addr, "Blocked connection to private IP (SSRF protection)");
             return;
         }
@@ -109,7 +131,22 @@ pub async fn handle_connect_tunnel(
                 }
             };
 
-        handle_passthrough(downstream, upstream_tcp, host, port, &upstream_ip, start, &log_tx, &client_ip, category, username.as_deref(), auth_method, threat_score, threat_tier).await;
+        handle_passthrough(
+            downstream,
+            upstream_tcp,
+            host,
+            port,
+            &upstream_ip,
+            start,
+            &log_tx,
+            &client_ip,
+            category,
+            username.as_deref(),
+            auth_method,
+            threat_score,
+            threat_tier,
+        )
+        .await;
     }
 }
 
@@ -235,7 +272,7 @@ pub async fn serve_block_page(
     };
 
     match tokio::time::timeout(BLOCK_PAGE_HEADER_TIMEOUT, header_read).await {
-        Ok(true) => {}      // headers read successfully
+        Ok(true) => {}       // headers read successfully
         Ok(false) => return, // oversized or connection closed
         Err(_) => return,    // timed out (slow client)
     }
@@ -297,15 +334,18 @@ async fn handle_mitm(
     let client_addr = client_ip.to_string();
 
     // Register context for request_filter to pick up (keyed by client socket address)
-    mitm_stream::register_context(client_addr.clone(), MitmContext {
-        client_ip: client_addr.clone(),
-        port,
-        username,
-        auth_method,
-        category,
-        tunnel_killed: false,
-        tunnel_patterns: mitm_stream::TunnelPatterns::new(&host),
-    });
+    mitm_stream::register_context(
+        client_addr.clone(),
+        MitmContext {
+            client_ip: client_addr.clone(),
+            port,
+            username,
+            auth_method,
+            category,
+            tunnel_killed: false,
+            tunnel_patterns: mitm_stream::TunnelPatterns::new(&host),
+        },
+    );
 
     // Route through Pingora's ProxyHttp pipeline
     let stream: Stream = Box::new(mitm);
@@ -418,4 +458,3 @@ fn is_ipv4_mapped_private(v6: &std::net::Ipv6Addr) -> bool {
         false
     }
 }
-

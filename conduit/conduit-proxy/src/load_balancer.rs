@@ -110,8 +110,10 @@ fn resolve_backend_addr(addr: &str) -> anyhow::Result<String> {
     Ok(resolved.to_string())
 }
 
-fn build_lb(group: &conduit_common::config::UpstreamGroup) -> anyhow::Result<LoadBalancer<RoundRobin>> {
-    use pingora_load_balancing::{Backend, Backends, discovery};
+fn build_lb(
+    group: &conduit_common::config::UpstreamGroup,
+) -> anyhow::Result<LoadBalancer<RoundRobin>> {
+    use pingora_load_balancing::{discovery, Backend, Backends};
     use std::collections::BTreeSet;
 
     let mut backends = BTreeSet::new();
@@ -186,8 +188,14 @@ mod tests {
                 domains: vec!["lb.test.local".into()],
                 algorithm: "round_robin".into(),
                 backends: vec![
-                    UpstreamBackend { addr: "127.0.0.1:9001".into(), weight: 1 },
-                    UpstreamBackend { addr: "127.0.0.1:9002".into(), weight: 1 },
+                    UpstreamBackend {
+                        addr: "127.0.0.1:9001".into(),
+                        weight: 1,
+                    },
+                    UpstreamBackend {
+                        addr: "127.0.0.1:9002".into(),
+                        weight: 1,
+                    },
                 ],
                 health_check: None,
             }],

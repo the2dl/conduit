@@ -26,19 +26,28 @@ const ALLOWED_CONFIG_KEYS: &[&str] = &[
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Ok(mut conn) = state.pool.get().await else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({})),
-        );
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({})));
     };
 
     let mut config: HashMap<String, String> = conn.hgetall(keys::CONFIG).await.unwrap_or_default();
-    config.entry("tls_intercept".into()).or_insert_with(|| "true".into());
-    config.entry("prevention_mode".into()).or_insert_with(|| "false".into());
-    config.entry("dga_prevention".into()).or_insert_with(|| "false".into());
-    config.entry("dga_threshold".into()).or_insert_with(|| "3.5".into());
-    config.entry("threat_prevention".into()).or_insert_with(|| "false".into());
-    config.entry("threat_block_threshold".into()).or_insert_with(|| "0.7".into());
+    config
+        .entry("tls_intercept".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("prevention_mode".into())
+        .or_insert_with(|| "false".into());
+    config
+        .entry("dga_prevention".into())
+        .or_insert_with(|| "false".into());
+    config
+        .entry("dga_threshold".into())
+        .or_insert_with(|| "3.5".into());
+    config
+        .entry("threat_prevention".into())
+        .or_insert_with(|| "false".into());
+    config
+        .entry("threat_block_threshold".into())
+        .or_insert_with(|| "0.7".into());
     (StatusCode::OK, Json(serde_json::json!(config)))
 }
 

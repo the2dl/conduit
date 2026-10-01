@@ -34,8 +34,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Warn if management API has no authentication configured
     if config.api_key.is_none() {
-        warn!("No api_key configured — management API is unauthenticated. \
-               Set api_key in conduit.toml to protect management endpoints.");
+        warn!(
+            "No api_key configured — management API is unauthenticated. \
+               Set api_key in conduit.toml to protect management endpoints."
+        );
     }
 
     let pool = conduit_common::redis::create_pool(&config.dragonfly_url, config.redis_pool_size)?;
@@ -58,8 +60,7 @@ async fn main() -> anyhow::Result<()> {
     routes::dlp::seed_builtins(&pool).await;
 
     // Per-IP rate limiter: 60 requests/second burst, sustained 20/s
-    let quota = Quota::per_second(nonzero_lit::u32!(60))
-        .allow_burst(nonzero_lit::u32!(60));
+    let quota = Quota::per_second(nonzero_lit::u32!(60)).allow_burst(nonzero_lit::u32!(60));
     let limiter = Arc::new(ApiRateLimiter::keyed(quota));
 
     let state = Arc::new(AppState {
@@ -72,8 +73,11 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = config.api_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(addr = %config.api_addr, "API server listening");
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

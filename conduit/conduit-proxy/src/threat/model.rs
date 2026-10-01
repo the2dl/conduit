@@ -33,10 +33,7 @@ impl FeatureVector {
         is_first_visit: bool,
         tier0_score: f32,
     ) -> Self {
-        let domain_part = host
-            .rsplit_once('.')
-            .map(|(rest, _)| rest)
-            .unwrap_or(host);
+        let domain_part = host.rsplit_once('.').map(|(rest, _)| rest).unwrap_or(host);
 
         let subdomain_depth = host.matches('.').count().saturating_sub(1) as u8;
 

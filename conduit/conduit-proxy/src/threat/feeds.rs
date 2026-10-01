@@ -72,7 +72,8 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
 
     info!(count = feeds.len(), "Refreshing threat feeds");
 
-    let mut new_bloom = super::bloom::new_bloom(engine.config.bloom_capacity, engine.config.bloom_fp_rate);
+    let mut new_bloom =
+        super::bloom::new_bloom(engine.config.bloom_capacity, engine.config.bloom_fp_rate);
     let mut new_nrd_bloom = super::bloom::new_bloom(1_000_000, 0.001);
     let mut new_cidrs = Vec::new();
     let mut total_entries = 0u64;
@@ -135,9 +136,15 @@ async fn refresh_all_feeds(engine: &ThreatEngine, pool: &Pool) -> anyhow::Result
 
     // Publish reload notification for multi-node sync
     if let Ok(mut conn) = pool.get().await {
+        let node_id = std::env::var("CONDUIT_NODE_ID").unwrap_or_default();
+        let payload = if node_id.is_empty() {
+            "feeds_updated".to_string()
+        } else {
+            format!("feeds_updated:{node_id}")
+        };
         let _: Result<(), _> = redis::cmd("PUBLISH")
             .arg(keys::THREAT_RELOAD_CHANNEL)
-            .arg("feeds_updated")
+            .arg(&payload)
             .query_async(&mut *conn)
             .await;
     }
@@ -178,12 +185,13 @@ fn validate_feed_url(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn fetch_and_parse(client: &reqwest::Client, feed: &ThreatFeed) -> anyhow::Result<Vec<String>> {
+async fn fetch_and_parse(
+    client: &reqwest::Client,
+    feed: &ThreatFeed,
+) -> anyhow::Result<Vec<String>> {
     validate_feed_url(&feed.url)?;
 
-    let resp = client.get(&feed.url)
-        .send()
-        .await?;
+    let resp = client.get(&feed.url).send().await?;
 
     if !resp.status().is_success() {
         anyhow::bail!("HTTP {}", resp.status());
@@ -316,10 +324,7 @@ async fn load_feeds_from_redis(pool: &Pool) -> Vec<ThreatFeed> {
         return Vec::new();
     };
 
-    let feed_ids: Vec<String> = conn
-        .smembers(keys::THREAT_FEEDS)
-        .await
-        .unwrap_or_default();
+    let feed_ids: Vec<String> = conn.smembers(keys::THREAT_FEEDS).await.unwrap_or_default();
 
     let mut feeds = Vec::new();
     for id in feed_ids {

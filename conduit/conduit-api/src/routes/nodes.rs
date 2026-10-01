@@ -19,7 +19,10 @@ type HmacSha256 = Hmac<Sha256>;
 /// List all nodes with heartbeat/online status.
 async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Ok(mut conn) = state.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(Vec::<NodeInfo>::new()));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Vec::<NodeInfo>::new()),
+        );
     };
 
     let node_ids: Vec<String> = conn.smembers(keys::NODES_INDEX).await.unwrap_or_default();
@@ -40,7 +43,10 @@ async fn get_node(
     Path(node_id): Path<String>,
 ) -> impl IntoResponse {
     let Ok(mut conn) = state.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!(null)));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!(null)),
+        );
     };
 
     match load_node_info(&mut conn, &node_id).await {
@@ -172,8 +178,7 @@ async fn create_node(
         .await;
 
     // Build the dragonfly_url for the enrollment response
-    let dragonfly_url =
-        build_node_dragonfly_url(&state.config.dragonfly_url, &node_id, &password);
+    let dragonfly_url = build_node_dragonfly_url(&state.config.dragonfly_url, &node_id, &password);
 
     let enrollment = NodeEnrollment {
         node_id: node_id.clone(),
@@ -223,10 +228,7 @@ async fn delete_node(
     StatusCode::NO_CONTENT
 }
 
-async fn load_node_info(
-    conn: &mut deadpool_redis::Connection,
-    node_id: &str,
-) -> Option<NodeInfo> {
+async fn load_node_info(conn: &mut deadpool_redis::Connection, node_id: &str) -> Option<NodeInfo> {
     let key = keys::node(node_id);
     let fields: Vec<String> = conn.hgetall(&key).await.ok()?;
 
@@ -308,9 +310,10 @@ fn verify_heartbeat_signature(hb: &NodeHeartbeat, hmac_key_b64: &str) -> bool {
         return false;
     };
 
-    let Ok(key_bytes) =
-        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, hmac_key_b64)
-    else {
+    let Ok(key_bytes) = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        hmac_key_b64,
+    ) else {
         return false;
     };
     let Ok(sig_bytes) =

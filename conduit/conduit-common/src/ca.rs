@@ -97,7 +97,11 @@ impl CertAuthority {
             .subject_name()
             .entries()
             .map(|e| {
-                let val = e.data().as_utf8().map(|s| s.to_string()).unwrap_or_default();
+                let val = e
+                    .data()
+                    .as_utf8()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 format!("{}={}", e.object().nid().short_name().unwrap_or("?"), val)
             })
             .collect::<Vec<_>>()
@@ -146,8 +150,7 @@ impl CertAuthority {
             .key_cert_sign()
             .crl_sign()
             .build()?;
-        let skid = SubjectKeyIdentifier::new()
-            .build(&builder.x509v3_context(None, None))?;
+        let skid = SubjectKeyIdentifier::new().build(&builder.x509v3_context(None, None))?;
 
         builder.append_extension(&basic_constraints)?;
         builder.append_extension(&key_usage)?;

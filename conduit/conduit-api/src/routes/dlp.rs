@@ -24,15 +24,11 @@ async fn list_rules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!([])));
     };
 
-    let raw: std::collections::HashMap<String, String> = conn
-        .hgetall(keys::DLP_RULES)
-        .await
-        .unwrap_or_default();
+    let raw: std::collections::HashMap<String, String> =
+        conn.hgetall(keys::DLP_RULES).await.unwrap_or_default();
 
-    let hits_map: std::collections::HashMap<String, u64> = conn
-        .hgetall(keys::STATS_DLP_HITS)
-        .await
-        .unwrap_or_default();
+    let hits_map: std::collections::HashMap<String, u64> =
+        conn.hgetall(keys::STATS_DLP_HITS).await.unwrap_or_default();
 
     let mut rules: Vec<DlpRule> = raw
         .values()
@@ -47,7 +43,10 @@ async fn list_rules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     rules.sort_by(|a, b| a.name.cmp(&b.name));
 
-    (StatusCode::OK, Json(serde_json::to_value(rules).unwrap_or_default()))
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(rules).unwrap_or_default()),
+    )
 }
 
 use conduit_common::types::DlpRuleAction;
@@ -62,14 +61,19 @@ struct CreateRule {
     enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 async fn create_rule(
     State(state): State<Arc<AppState>>,
     Json(input): Json<CreateRule>,
 ) -> impl IntoResponse {
     if let Err(msg) = validate_regex(&input.regex) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        );
     }
 
     let rule = DlpRule {
@@ -83,14 +87,23 @@ async fn create_rule(
     };
 
     let Ok(mut conn) = state.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "store unavailable" })));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "store unavailable" })),
+        );
     };
 
     let json = serde_json::to_string(&rule).unwrap();
-    let _: () = conn.hset(keys::DLP_RULES, &rule.id, &json).await.unwrap_or(());
+    let _: () = conn
+        .hset(keys::DLP_RULES, &rule.id, &json)
+        .await
+        .unwrap_or(());
 
     super::publish_reload(&state.pool, "dlp").await;
-    (StatusCode::CREATED, Json(serde_json::to_value(&rule).unwrap_or_default()))
+    (
+        StatusCode::CREATED,
+        Json(serde_json::to_value(&rule).unwrap_or_default()),
+    )
 }
 
 async fn update_rule(
@@ -98,24 +111,42 @@ async fn update_rule(
     Json(rule): Json<DlpRule>,
 ) -> impl IntoResponse {
     if let Err(msg) = validate_regex(&rule.regex) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        );
     }
 
     let Ok(mut conn) = state.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "store unavailable" })));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "store unavailable" })),
+        );
     };
 
     // Verify the rule exists
-    let exists: bool = conn.hexists(keys::DLP_RULES, &rule.id).await.unwrap_or(false);
+    let exists: bool = conn
+        .hexists(keys::DLP_RULES, &rule.id)
+        .await
+        .unwrap_or(false);
     if !exists {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "rule not found" })));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "rule not found" })),
+        );
     }
 
     let json = serde_json::to_string(&rule).unwrap();
-    let _: () = conn.hset(keys::DLP_RULES, &rule.id, &json).await.unwrap_or(());
+    let _: () = conn
+        .hset(keys::DLP_RULES, &rule.id, &json)
+        .await
+        .unwrap_or(());
 
     super::publish_reload(&state.pool, "dlp").await;
-    (StatusCode::OK, Json(serde_json::to_value(&rule).unwrap_or_default()))
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&rule).unwrap_or_default()),
+    )
 }
 
 #[derive(Deserialize)]
@@ -132,7 +163,10 @@ async fn delete_rule(
     };
 
     // Don't allow deleting built-in rules
-    if let Ok(Some(json)) = conn.hget::<_, _, Option<String>>(keys::DLP_RULES, &delete.id).await {
+    if let Ok(Some(json)) = conn
+        .hget::<_, _, Option<String>>(keys::DLP_RULES, &delete.id)
+        .await
+    {
         if let Ok(rule) = serde_json::from_str::<DlpRule>(&json) {
             if rule.builtin {
                 return StatusCode::FORBIDDEN;
@@ -349,7 +383,9 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
         },
     ];
 
-    let Ok(mut conn) = pool.get().await else { return };
+    let Ok(mut conn) = pool.get().await else {
+        return;
+    };
 
     let mut any_inserted = false;
     for rule in &builtins {
@@ -359,7 +395,10 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             .unwrap_or(false);
         if !exists {
             let json = serde_json::to_string(rule).unwrap();
-            let _: () = conn.hset(keys::DLP_RULES, &rule.id, &json).await.unwrap_or(());
+            let _: () = conn
+                .hset(keys::DLP_RULES, &rule.id, &json)
+                .await
+                .unwrap_or(());
             any_inserted = true;
         }
     }

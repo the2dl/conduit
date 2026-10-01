@@ -6,6 +6,7 @@ pub mod health;
 pub mod import;
 pub mod logs;
 pub mod nodes;
+pub mod notifications;
 pub mod policies;
 pub mod stats;
 pub mod threat;
@@ -53,22 +54,14 @@ pub async fn publish_reload(pool: &Pool, what: &str) {
 /// API key authentication middleware.
 /// If `config.api_key` is set, all requests must include a matching
 /// `Authorization: Bearer <key>` or `X-API-Key: <key>` header.
-async fn api_auth(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn api_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     if let Some(ref expected_key) = state.config.api_key {
         let provided = req
             .headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.strip_prefix("Bearer "))
-            .or_else(|| {
-                req.headers()
-                    .get("x-api-key")
-                    .and_then(|v| v.to_str().ok())
-            });
+            .or_else(|| req.headers().get("x-api-key").and_then(|v| v.to_str().ok()));
 
         match provided {
             Some(key) if constant_time_eq(key.as_bytes(), expected_key.as_bytes()) => {}
@@ -139,7 +132,10 @@ async fn security_headers(req: Request, next: Next) -> Response {
             .unwrap(),
     );
     headers.insert("x-xss-protection", "1; mode=block".parse().unwrap());
-    headers.insert("referrer-policy", "strict-origin-when-cross-origin".parse().unwrap());
+    headers.insert(
+        "referrer-policy",
+        "strict-origin-when-cross-origin".parse().unwrap(),
+    );
     response
 }
 
@@ -159,14 +155,13 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .merge(config::routes())
         .merge(import::routes())
         .merge(nodes::routes())
+        .merge(notifications::routes())
         .merge(threat::routes())
         .merge(ca::protected_routes())
         .route_layer(middleware::from_fn(audit_log))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_auth));
 
-    let api = Router::new()
-        .merge(public_api)
-        .merge(protected_api);
+    let api = Router::new().merge(public_api).merge(protected_api);
 
     let mut router = Router::new()
         .nest("/api/v1", api)

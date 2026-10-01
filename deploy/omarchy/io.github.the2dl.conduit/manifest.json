@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.the2dl.conduit",
+  "name": "Conduit",
+  "version": "0.1.0",
+  "author": "the2dl",
+  "license": "MIT",
+  "description": "Local security gateway & forward proxy monitor: throughput, TLS inspection, prevention toggles, and portal access.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Conduit",
+    "description": "Forward proxy status, throughput, prevention toggles, and portal access.",
+    "category": "Network",
+    "aliases": [
+      "conduit",
+      "proxy",
+      "gateway"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pollIntervalSec": 2,
+      "showThroughputInBar": false,
+      "iconOnly": true
+    },
+    "schema": [
+      {
+        "key": "pollIntervalSec",
+        "type": "integer",
+        "label": "Poll interval (seconds)",
+        "min": 1,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 2,
+        "description": "How often throughput and telemetry are polled when active."
+      },
+      {
+        "key": "showThroughputInBar",
+        "type": "boolean",
+        "label": "Show throughput in bar",
+        "defaultValue": false,
+        "description": "Display live requests/second beside the gateway glyph."
+      },
+      {
+        "key": "iconOnly",
+        "type": "boolean",
+        "label": "Icon only mode",
+        "defaultValue": true,
+        "description": "Hide text labels in the bar and display the icon alone."
+      }
+    ]
+  }
+}

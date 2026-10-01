@@ -3,7 +3,8 @@ use deadpool_redis::{Config, Pool, Runtime};
 /// Create a deadpool-redis connection pool.
 pub fn create_pool(url: &str, pool_size: usize) -> anyhow::Result<Pool> {
     let cfg = Config::from_url(url);
-    let pool = cfg.builder()?
+    let pool = cfg
+        .builder()?
         .max_size(pool_size)
         .runtime(Runtime::Tokio1)
         .build()?;
@@ -13,7 +14,10 @@ pub fn create_pool(url: &str, pool_size: usize) -> anyhow::Result<Pool> {
 /// Verify connectivity to Dragonfly/Redis with a PING.
 /// Returns a clear error on AUTH failure or network issues.
 pub async fn verify_connection(pool: &Pool) -> anyhow::Result<()> {
-    let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!("Failed to get connection from pool: {e}"))?;
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get connection from pool: {e}"))?;
     let _: String = redis::cmd("PING")
         .query_async(&mut *conn)
         .await
@@ -83,6 +87,9 @@ pub mod keys {
 
     /// Set of manually added domain categories
     pub const CATEGORIES_MANUAL: &str = "cleargate:categories:manual";
+
+    /// Set of muted domains for desktop notifications
+    pub const MUTED_NOTIFICATIONS: &str = "cleargate:notifications:muted";
 
     // --- Multi-node keys ---
 

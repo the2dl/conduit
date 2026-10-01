@@ -40,15 +40,15 @@ impl IpVersion {
     pub fn filter(&self, addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
         match self {
             Self::Any => addrs,
-            Self::V4Only => {
-                addrs.into_iter().filter(|a| a.is_ipv4()).collect()
-            }
-            Self::V6Only => {
-                addrs.into_iter().filter(|a| !a.is_ipv4()).collect()
-            }
+            Self::V4Only => addrs.into_iter().filter(|a| a.is_ipv4()).collect(),
+            Self::V6Only => addrs.into_iter().filter(|a| !a.is_ipv4()).collect(),
             Self::V4Preferred => {
                 let v4: Vec<_> = addrs.iter().filter(|a| a.is_ipv4()).copied().collect();
-                if v4.is_empty() { addrs } else { v4 }
+                if v4.is_empty() {
+                    addrs
+                } else {
+                    v4
+                }
             }
         }
     }
@@ -58,15 +58,13 @@ impl IpVersion {
     pub fn pick_first(&self, addrs: &[SocketAddr]) -> Option<SocketAddr> {
         match self {
             Self::Any => addrs.first().copied(),
-            Self::V4Only => {
-                addrs.iter().find(|a| a.is_ipv4()).copied()
-            }
-            Self::V4Preferred => {
-                addrs.iter().find(|a| a.is_ipv4()).or(addrs.first()).copied()
-            }
-            Self::V6Only => {
-                addrs.iter().find(|a| !a.is_ipv4()).copied()
-            }
+            Self::V4Only => addrs.iter().find(|a| a.is_ipv4()).copied(),
+            Self::V4Preferred => addrs
+                .iter()
+                .find(|a| a.is_ipv4())
+                .or(addrs.first())
+                .copied(),
+            Self::V6Only => addrs.iter().find(|a| !a.is_ipv4()).copied(),
         }
     }
 }

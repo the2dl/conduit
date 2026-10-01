@@ -85,10 +85,7 @@ async fn fetch_logs_paginated(state: &AppState, query: &LogQuery) -> PaginatedLo
     let limit = query.limit.min(MAX_PAGE_SIZE);
 
     // XREVRANGE: newest first. Cursor is a stream ID (or "+" for the beginning).
-    let start = query
-        .cursor
-        .as_deref()
-        .unwrap_or("+");
+    let start = query.cursor.as_deref().unwrap_or("+");
 
     let mut entries = Vec::with_capacity(limit);
     let mut last_id: Option<String> = None;
@@ -256,9 +253,9 @@ async fn export_logs(
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let body = Body::from_stream(
-        tokio_stream::StreamExt::map(stream, |chunk| Ok::<_, std::convert::Infallible>(chunk)),
-    );
+    let body = Body::from_stream(tokio_stream::StreamExt::map(stream, |chunk| {
+        Ok::<_, std::convert::Infallible>(chunk)
+    }));
 
     if is_csv {
         Response::builder()
@@ -346,7 +343,9 @@ async fn stream_filtered_entries(
 }
 
 fn format_csv_row(e: &LogEntry) -> String {
-    let block_reason = e.block_reason.as_ref()
+    let block_reason = e
+        .block_reason
+        .as_ref()
         .map(|r| r.to_string())
         .unwrap_or_default();
     format!(
@@ -393,8 +392,7 @@ pub fn parse_stream_entries(raw: &[redis::Value]) -> Vec<(String, LogEntry)> {
                             (&fields[i], &fields[i + 1])
                         {
                             if k == b"json" {
-                                json_value =
-                                    Some(String::from_utf8_lossy(v).to_string());
+                                json_value = Some(String::from_utf8_lossy(v).to_string());
                             }
                         }
                         i += 2;

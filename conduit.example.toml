@@ -137,3 +137,34 @@ fail_closed = true
 # name = "proxy-east-1"
 # enrollment_token = "one-time-token"
 # hmac_key = "base64url-hmac-key"
+
+# --- Allowlist (Bypass SSRF protection, caching, and inspection for trusted targets) ---
+# [allowlist]
+# allow_loopback = true                    # Permits loopback traffic (localhost, 127.0.0.1, ::1)
+# min_loopback_port = 1024                 # Blocks privileged system ports (< 1024)
+# blocked_loopback_ports = [22, 2375, 2376, 3306, 5432, 6379, 6380, 11211, 27017] # Block sensitive DB/daemon ports
+# only_local_clients_for_loopback = true   # Prevent remote LAN clients from proxying into host loopback
+# hosts = [
+#     "localhost",
+#     "127.0.0.1",
+#     "::1",
+#     "mtalk.google.com",                  # Google FCM push notifications on port 5228-5230
+#     "localhost:8443",                    # Explicit host:port overrides default port blocks
+#     "*.internal.corp",
+# ]
+
+# --- Outbound Egress Port Restrictions ---
+# [egress]
+# allowed_connect_ports = [443, 8443, 6443] # Allowed destination ports for CONNECT (HTTPS/TCP)
+# allowed_http_ports = [80, 8080]          # Allowed destination ports for plain HTTP
+
+# --- Desktop Notifications & Alert Muting ---
+# [notifications]
+# enabled = true
+# min_interval_secs = 2
+# muted_domains = [
+#     "browser-intake-us5-datadoghq.com",
+#     "*.datadoghq.com",
+# ]
+
+

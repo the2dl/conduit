@@ -335,7 +335,9 @@ pub enum DlpRuleAction {
 }
 
 impl Default for DlpRuleAction {
-    fn default() -> Self { Self::Log }
+    fn default() -> Self {
+        Self::Log
+    }
 }
 
 /// A DLP rule stored in Dragonfly and managed via the API.
@@ -354,7 +356,9 @@ pub struct DlpRule {
     #[serde(default)]
     pub hits: u64,
 }
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Per-node stats breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]

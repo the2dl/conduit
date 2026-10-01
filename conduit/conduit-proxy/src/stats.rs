@@ -47,10 +47,18 @@ pub fn record_threat(blocked: bool, tier: ThreatTier) {
         THREAT_BLOCKS_DELTA.fetch_add(1, Ordering::Relaxed);
     }
     match tier {
-        ThreatTier::Tier0 => { THREAT_T0_DELTA.fetch_add(1, Ordering::Relaxed); }
-        ThreatTier::Tier1 => { THREAT_T1_DELTA.fetch_add(1, Ordering::Relaxed); }
-        ThreatTier::Tier2 => { THREAT_T2_DELTA.fetch_add(1, Ordering::Relaxed); }
-        ThreatTier::Tier3 => { THREAT_T3_DELTA.fetch_add(1, Ordering::Relaxed); }
+        ThreatTier::Tier0 => {
+            THREAT_T0_DELTA.fetch_add(1, Ordering::Relaxed);
+        }
+        ThreatTier::Tier1 => {
+            THREAT_T1_DELTA.fetch_add(1, Ordering::Relaxed);
+        }
+        ThreatTier::Tier2 => {
+            THREAT_T2_DELTA.fetch_add(1, Ordering::Relaxed);
+        }
+        ThreatTier::Tier3 => {
+            THREAT_T3_DELTA.fetch_add(1, Ordering::Relaxed);
+        }
         ThreatTier::None => {}
     }
 }
@@ -79,15 +87,21 @@ async fn flush_stats(pool: &Pool, node_id: Option<&str>) {
         if let Ok(mut conn) = pool.get().await {
             let _: Result<(), _> = conn.set(keys::STATS_ACTIVE, active).await;
             if let Some(nid) = node_id {
-                let _: Result<(), _> = conn
-                    .set(keys::stats_node(nid, "active"), active)
-                    .await;
+                let _: Result<(), _> = conn.set(keys::stats_node(nid, "active"), active).await;
             }
         }
         return;
     }
 
-    trace!(req, blk, tls, active, c_hit, c_miss, "Flushing stats to Redis");
+    trace!(
+        req,
+        blk,
+        tls,
+        active,
+        c_hit,
+        c_miss,
+        "Flushing stats to Redis"
+    );
 
     let Ok(mut conn) = pool.get().await else {
         // Put the deltas back so they aren't lost

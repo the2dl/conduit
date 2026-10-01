@@ -62,7 +62,11 @@ pub async fn evaluate(
         }
         if matches_rule(rule, domain, category, username, groups) {
             trace!(rule_id = %rule.id, action = ?rule.action, "Policy match");
-            let name = if rule.name.is_empty() { None } else { Some(rule.name.clone()) };
+            let name = if rule.name.is_empty() {
+                None
+            } else {
+                Some(rule.name.clone())
+            };
             return (rule.action, Some(rule.id.clone()), name);
         }
     }
@@ -73,7 +77,9 @@ pub async fn evaluate(
 /// Load rules from cache if fresh, otherwise reload from Dragonfly.
 /// On Redis failure, returns stale cached rules if available.
 async fn load_rules_cached(pool: &Arc<Pool>) -> anyhow::Result<Vec<PolicyRule>> {
-    let forced = FORCE_RELOAD.compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed).is_ok();
+    let forced = FORCE_RELOAD
+        .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok();
 
     // Fast path: read from fresh cache (skip if forced reload)
     if !forced {
@@ -195,8 +201,20 @@ mod tests {
             hits: 0,
         };
 
-        assert!(matches_rule(&rule, "facebook.com", Some("social"), None, &[]));
-        assert!(!matches_rule(&rule, "google.com", Some("search"), None, &[]));
+        assert!(matches_rule(
+            &rule,
+            "facebook.com",
+            Some("social"),
+            None,
+            &[]
+        ));
+        assert!(!matches_rule(
+            &rule,
+            "google.com",
+            Some("search"),
+            None,
+            &[]
+        ));
         assert!(!matches_rule(&rule, "google.com", None, None, &[]));
     }
 

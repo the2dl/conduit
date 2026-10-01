@@ -7,6 +7,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use std::sync::RwLock;
+
+static STATIC_MUTED_DOMAINS: Lazy<RwLock<Vec<String>>> = Lazy::new(|| {
+    RwLock::new(vec![
+        "browser-intake-us5-datadoghq.com".to_string(),
+        "*.datadoghq.com".to_string(),
+    ])
+});
+
+pub fn set_static_muted_domains(domains: Vec<String>) {
+    if let Ok(mut guard) = STATIC_MUTED_DOMAINS.write() {
+        *guard = domains;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub prevention_mode: bool,
@@ -16,6 +31,8 @@ pub struct RuntimeConfig {
     pub threat_block_threshold: f32,
     pub tls_intercept: bool,
     pub fail_closed: bool,
+    pub notifications_enabled: bool,
+    pub muted_notification_domains: Vec<String>,
 }
 
 impl Default for RuntimeConfig {
@@ -28,7 +45,23 @@ impl Default for RuntimeConfig {
             threat_block_threshold: 0.70,
             tls_intercept: true,
             fail_closed: false,
+            notifications_enabled: true,
+            muted_notification_domains: vec![
+                "browser-intake-us5-datadoghq.com".to_string(),
+                "*.datadoghq.com".to_string(),
+            ],
         }
+    }
+}
+
+impl RuntimeConfig {
+    pub fn is_domain_muted(&self, domain: &str) -> bool {
+        for pattern in &self.muted_notification_domains {
+            if conduit_common::config::matches_domain_pattern(pattern, domain) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -78,6 +111,25 @@ async fn load_from_redis(pool: &Pool) -> anyhow::Result<RuntimeConfig> {
             .unwrap_or(default)
     };
 
+    let muted_set: Vec<String> = conn
+        .smembers(keys::MUTED_NOTIFICATIONS)
+        .await
+        .unwrap_or_default();
+
+    let mut all_muted = STATIC_MUTED_DOMAINS
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+
+    for m in muted_set {
+        if !all_muted
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&m))
+        {
+            all_muted.push(m);
+        }
+    }
+
     Ok(RuntimeConfig {
         prevention_mode: parse_bool("prevention_mode", false),
         dga_prevention: parse_bool("dga_prevention", false),
@@ -86,5 +138,7 @@ async fn load_from_redis(pool: &Pool) -> anyhow::Result<RuntimeConfig> {
         threat_block_threshold: parse_f32("threat_block_threshold", 0.70),
         tls_intercept: parse_bool("tls_intercept", true),
         fail_closed: parse_bool("fail_closed", false),
+        notifications_enabled: parse_bool("notifications_enabled", true),
+        muted_notification_domains: all_muted,
     })
 }

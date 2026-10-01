@@ -10,28 +10,25 @@ use tracing::{error, info};
 static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
 static REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
-    let opts = Opts::new("requests_total", "Total requests processed")
-        .namespace("conduit");
+    let opts = Opts::new("requests_total", "Total requests processed").namespace("conduit");
     let counter = IntCounterVec::new(opts, &["action", "scheme"]).unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
     counter
 });
 
 static BLOCKS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
-    let opts = Opts::new("blocks_total", "Total blocked requests")
-        .namespace("conduit");
+    let opts = Opts::new("blocks_total", "Total blocked requests").namespace("conduit");
     let counter = IntCounterVec::new(opts, &["reason"]).unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
     counter
 });
 
 static REQUEST_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
-    let opts = HistogramOpts::new(
-        "request_duration_seconds",
-        "Request duration in seconds",
-    )
-    .namespace("conduit")
-    .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]);
+    let opts = HistogramOpts::new("request_duration_seconds", "Request duration in seconds")
+        .namespace("conduit")
+        .buckets(vec![
+            0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ]);
     let hist = HistogramVec::new(opts, &["scheme"]).unwrap();
     REGISTRY.register(Box::new(hist.clone())).unwrap();
     hist
@@ -62,8 +59,8 @@ static RATE_LIMITS: Lazy<IntCounter> = Lazy::new(|| {
 });
 
 static THREAT_EVALS: Lazy<IntCounterVec> = Lazy::new(|| {
-    let opts = Opts::new("threat_evaluations_total", "Threat evaluations by tier")
-        .namespace("conduit");
+    let opts =
+        Opts::new("threat_evaluations_total", "Threat evaluations by tier").namespace("conduit");
     let counter = IntCounterVec::new(opts, &["tier"]).unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
     counter
@@ -77,9 +74,7 @@ static DNS_CACHE_HITS: Lazy<IntCounter> = Lazy::new(|| {
 
 /// Record a completed request for metrics.
 pub fn record_request(action: &str, scheme: &str, duration_ms: u64, block_reason: Option<&str>) {
-    REQUESTS_TOTAL
-        .with_label_values(&[action, scheme])
-        .inc();
+    REQUESTS_TOTAL.with_label_values(&[action, scheme]).inc();
     REQUEST_DURATION
         .with_label_values(&[scheme])
         .observe(duration_ms as f64 / 1000.0);

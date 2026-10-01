@@ -7,9 +7,9 @@ use http::Method;
 use pingora_cache::cache_control::CacheControl;
 use pingora_cache::eviction::EvictionManager;
 use pingora_cache::filters;
+use pingora_cache::key::CacheKey;
 use pingora_cache::lock::CacheKeyLockImpl;
 use pingora_cache::storage::Storage;
-use pingora_cache::key::CacheKey;
 use pingora_cache::{CacheMetaDefaults, NoCacheReason, RespCacheable};
 use pingora_core::protocols::Digest;
 use pingora_core::upstreams::peer::HttpPeer;
@@ -18,7 +18,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::ctx::RequestContext;
 use crate::identity;
@@ -123,7 +123,12 @@ impl ClearGateProxy {
 
     #[allow(dead_code)]
     fn build_block_page(&self, host: &str, category: &str, reason: &str) -> Bytes {
-        Bytes::from(crate::service::build_block_html(host, category, reason, &self.config))
+        Bytes::from(crate::service::build_block_html(
+            host,
+            category,
+            reason,
+            &self.config,
+        ))
     }
 
     fn render_threat_block_page(
@@ -154,11 +159,7 @@ impl ClearGateProxy {
         Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
     }
 
-    fn render_policy_block_page(
-        &self,
-        session: &Session,
-        ctx: &RequestContext,
-    ) -> Bytes {
+    fn render_policy_block_page(&self, session: &Session, ctx: &RequestContext) -> Bytes {
         let method = session.req_header().method.as_str();
         let node_name = crate::block_page::get_node_name(&self.config);
         let user = ctx.identity.username.as_deref().unwrap_or("unknown");
@@ -182,17 +183,15 @@ impl ClearGateProxy {
         Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
     }
 
-    fn render_dlp_block_page(
-        &self,
-        session: &Session,
-        ctx: &RequestContext,
-    ) -> Bytes {
+    fn render_dlp_block_page(&self, session: &Session, ctx: &RequestContext) -> Bytes {
         let method = session.req_header().method.as_str();
         let node_name = crate::block_page::get_node_name(&self.config);
         let user = ctx.identity.username.as_deref().unwrap_or("unknown");
         let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
         let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
-        let rule_name = ctx.dlp_matches.as_ref()
+        let rule_name = ctx
+            .dlp_matches
+            .as_ref()
             .and_then(|m| m.first())
             .map(|s| s.as_str())
             .unwrap_or("Sensitive Data");
@@ -244,19 +243,39 @@ impl ClearGateProxy {
 
     /// Get timeout config values or defaults.
     fn connect_timeout(&self) -> std::time::Duration {
-        let secs = self.config.timeouts.as_ref().map(|t| t.connect_timeout_secs).unwrap_or(10);
+        let secs = self
+            .config
+            .timeouts
+            .as_ref()
+            .map(|t| t.connect_timeout_secs)
+            .unwrap_or(10);
         std::time::Duration::from_secs(secs)
     }
     fn total_connection_timeout(&self) -> std::time::Duration {
-        let secs = self.config.timeouts.as_ref().map(|t| t.total_connection_timeout_secs).unwrap_or(15);
+        let secs = self
+            .config
+            .timeouts
+            .as_ref()
+            .map(|t| t.total_connection_timeout_secs)
+            .unwrap_or(15);
         std::time::Duration::from_secs(secs)
     }
     fn read_timeout(&self) -> std::time::Duration {
-        let secs = self.config.timeouts.as_ref().map(|t| t.read_timeout_secs).unwrap_or(60);
+        let secs = self
+            .config
+            .timeouts
+            .as_ref()
+            .map(|t| t.read_timeout_secs)
+            .unwrap_or(60);
         std::time::Duration::from_secs(secs)
     }
     fn write_timeout(&self) -> std::time::Duration {
-        let secs = self.config.timeouts.as_ref().map(|t| t.write_timeout_secs).unwrap_or(60);
+        let secs = self
+            .config
+            .timeouts
+            .as_ref()
+            .map(|t| t.write_timeout_secs)
+            .unwrap_or(60);
         std::time::Duration::from_secs(secs)
     }
 }
@@ -282,18 +301,7 @@ pub(crate) fn extract_ip_from_addr(addr: &str) -> &str {
 
 /// Query the kernel's routing table for the primary non-loopback LAN IP (e.g. 192.168.x.x).
 pub(crate) fn get_primary_lan_ip() -> Option<String> {
-    static LAN_IP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    LAN_IP.get_or_init(|| {
-        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-        socket.connect("1.1.1.1:80").ok()?;
-        let local_addr = socket.local_addr().ok()?;
-        let ip = local_addr.ip().to_string();
-        if ip != "127.0.0.1" && ip != "::1" {
-            Some(ip)
-        } else {
-            None
-        }
-    }).clone()
+    conduit_common::config::get_primary_lan_ip()
 }
 
 /// Normalize loopback IP (127.0.0.1, ::1) to the host's actual LAN IP if available.
@@ -369,15 +377,14 @@ impl ProxyHttp for ClearGateProxy {
     }
 
     /// Main request filter — runs before upstream connection.
-    async fn request_filter(
-        &self,
-        session: &mut Session,
-        ctx: &mut Self::CTX,
-    ) -> Result<bool> {
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         // Check request header size limit (approximate — excludes request line)
         if let Some(ref limits) = self.config.request_limits {
             if limits.max_request_header_size > 0 {
-                let header_size: usize = session.req_header().headers.iter()
+                let header_size: usize = session
+                    .req_header()
+                    .headers
+                    .iter()
                     .map(|(k, v)| k.as_str().len() + v.len() + 4) // ": " + "\r\n"
                     .sum();
                 if header_size > limits.max_request_header_size {
@@ -414,8 +421,14 @@ impl ProxyHttp for ClearGateProxy {
             })
         });
 
-        if let Some((mitm_client_ip, mitm_port, mitm_username, mitm_auth_method, mitm_category, tunnel_killed)) =
-            mitm_ctx
+        if let Some((
+            mitm_client_ip,
+            mitm_port,
+            mitm_username,
+            mitm_auth_method,
+            mitm_category,
+            tunnel_killed,
+        )) = mitm_ctx
         {
             ctx.client_ip = normalize_client_ip(extract_ip_from_addr(&mitm_client_ip));
             ctx.tls_intercepted = true;
@@ -437,7 +450,11 @@ impl ProxyHttp for ClearGateProxy {
             ctx.category = mitm_category;
 
             if tunnel_killed {
-                let body = self.render_threat_block_page(session, ctx, "Tunnel terminated (threat detected)");
+                let body = self.render_threat_block_page(
+                    session,
+                    ctx,
+                    "Tunnel terminated (threat detected)",
+                );
                 let mut resp = ResponseHeader::build(403, Some(3))?;
                 resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
                 resp.insert_header("Content-Length", &body.len().to_string())?;
@@ -485,9 +502,7 @@ impl ProxyHttp for ClearGateProxy {
                 let mut resp = ResponseHeader::build(407, Some(4))?;
                 resp.insert_header("Proxy-Authenticate", "Basic realm=\"Conduit\"")?;
                 resp.insert_header("Content-Length", "0")?;
-                session
-                    .write_response_header(Box::new(resp), true)
-                    .await?;
+                session.write_response_header(Box::new(resp), true).await?;
                 ctx.response_status = 407;
                 return Ok(true);
             }
@@ -499,11 +514,9 @@ impl ProxyHttp for ClearGateProxy {
         // in service.rs. If this is too aggressive for MITM, consider skipping when
         // ctx.tls_intercepted is true.
         if let Some(ref limiter) = self.rate_limiter {
-            if let Err(_kind) = limiter.check_rate(
-                &ctx.client_ip,
-                ctx.identity.username.as_deref(),
-                &ctx.host,
-            ) {
+            if let Err(_kind) =
+                limiter.check_rate(&ctx.client_ip, ctx.identity.username.as_deref(), &ctx.host)
+            {
                 crate::metrics::record_rate_limit();
                 let mut resp = ResponseHeader::build(429, Some(2))?;
                 resp.insert_header("Retry-After", &limiter.window_secs().to_string())?;
@@ -523,78 +536,119 @@ impl ProxyHttp for ClearGateProxy {
         }
 
         let rt_cfg = crate::runtime_config::get();
+        let is_allowlisted = self
+            .config
+            .allowlist
+            .as_ref()
+            .map(|a| a.is_allowed(&ctx.host, ctx.port, None, Some(&ctx.client_ip)))
+            .unwrap_or(false);
 
-        // Threat detection
-        if let Some(ref engine) = self.threat_engine {
-            let verdict = crate::threat::evaluate_request(
-                engine,
+        // Policy evaluation
+        let (action, rule_id, matched_rule_name) = if is_allowlisted {
+            (PolicyAction::Allow, None, Some("Allowlist".to_string()))
+        } else {
+            policy::rules::evaluate(
+                &self.pool,
                 &ctx.host,
-                ctx.port,
-                &ctx.path,
-                &ctx.scheme,
                 ctx.category.as_deref(),
-                ctx.upstream_addr.as_deref(),
-                None, None,
-            );
+                ctx.identity.username.as_deref(),
+                &ctx.identity.groups,
+                rt_cfg.fail_closed,
+            )
+            .await
+        };
+        ctx.rule_id = rule_id.clone();
+        ctx.rule_name = matched_rule_name.clone();
 
-            let rep_block = crate::threat::check_reputation(engine, &ctx.host);
-            let is_threat = verdict.blocked || rep_block.is_some();
+        // Explicit allow rules (from operator policies or allowlist) override general egress port restrictions
+        let is_explicitly_allowed =
+            is_allowlisted || (action == PolicyAction::Allow && rule_id.is_some());
 
-            if is_threat {
-                let score = rep_block.unwrap_or(verdict.score);
-                let block_reason = if rep_block.is_some() {
-                    BlockReason::ThreatReputation
-                } else {
-                    BlockReason::ThreatHeuristic
-                };
-                let reason_text = if rep_block.is_some() {
-                    "Threat detected (reputation)"
-                } else {
-                    "Threat detected (heuristic)"
-                };
-
-                ctx.threat_verdict = Some(conduit_common::types::ThreatVerdict {
-                    score,
-                    blocked: rt_cfg.prevention_mode,
-                    ..verdict
-                });
-
-                if rt_cfg.prevention_mode {
-                    ctx.action = PolicyAction::Block;
-                    ctx.block_reason = Some(block_reason);
-                    debug!(host = %ctx.host, score, "Blocking request (threat detected)");
-                    let body = self.render_threat_block_page(session, ctx, reason_text);
-                    let mut resp = ResponseHeader::build(403, Some(3))?;
-                    resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
-                    resp.insert_header("Content-Length", &body.len().to_string())?;
+        // Egress port restriction check (plain non-intercepted HTTP)
+        if !ctx.tls_intercepted && !is_explicitly_allowed {
+            if let Some(ref egress) = self.config.egress {
+                if !egress.is_http_port_allowed(ctx.port) {
+                    info!(host = %ctx.host, port = ctx.port, client_ip = %ctx.client_ip, "HTTP request rejected: port not permitted by egress policy");
+                    let mut resp = ResponseHeader::build(403, Some(0))?;
+                    resp.insert_header("Content-Type", "text/plain")?;
                     resp.insert_header("Connection", "close")?;
+                    session.write_response_header(Box::new(resp), false).await?;
                     session
-                        .write_response_header(Box::new(resp), false)
+                        .write_response_body(
+                            Some(bytes::Bytes::from(
+                                "403 Forbidden: Destination port not permitted by egress policy\n",
+                            )),
+                            true,
+                        )
                         .await?;
-                    session.write_response_body(Some(body), true).await?;
                     ctx.response_status = 403;
+                    ctx.action = PolicyAction::Block;
+                    ctx.block_reason = Some(BlockReason::Policy);
+                    ctx.rule_name = Some("EgressPortRestriction".to_string());
                     return Ok(true);
-                } else {
-                    ctx.action = PolicyAction::Log;
-                    debug!(host = %ctx.host, score, "Threat detected in audit mode (not blocked)");
                 }
-            } else {
-                ctx.threat_verdict = Some(verdict);
             }
         }
 
-        // Policy evaluation
-        let (action, rule_id, matched_rule_name) = policy::rules::evaluate(
-            &self.pool,
-            &ctx.host,
-            ctx.category.as_deref(),
-            ctx.identity.username.as_deref(),
-            &ctx.identity.groups,
-            rt_cfg.fail_closed,
-        )
-        .await;
-        ctx.rule_id = rule_id;
-        ctx.rule_name = matched_rule_name;
+        // Threat detection (skipped for allowlisted hosts)
+        if !is_allowlisted {
+            if let Some(ref engine) = self.threat_engine {
+                let verdict = crate::threat::evaluate_request(
+                    engine,
+                    &ctx.host,
+                    ctx.port,
+                    &ctx.path,
+                    &ctx.scheme,
+                    ctx.category.as_deref(),
+                    ctx.upstream_addr.as_deref(),
+                    None,
+                    None,
+                );
+
+                let rep_block = crate::threat::check_reputation(engine, &ctx.host);
+                let is_threat = verdict.blocked || rep_block.is_some();
+
+                if is_threat {
+                    let score = rep_block.unwrap_or(verdict.score);
+                    let block_reason = if rep_block.is_some() {
+                        BlockReason::ThreatReputation
+                    } else {
+                        BlockReason::ThreatHeuristic
+                    };
+                    let reason_text = if rep_block.is_some() {
+                        "Threat detected (reputation)"
+                    } else {
+                        "Threat detected (heuristic)"
+                    };
+
+                    ctx.threat_verdict = Some(conduit_common::types::ThreatVerdict {
+                        score,
+                        blocked: rt_cfg.prevention_mode,
+                        ..verdict
+                    });
+
+                    if rt_cfg.prevention_mode {
+                        ctx.action = PolicyAction::Block;
+                        ctx.block_reason = Some(block_reason);
+                        debug!(host = %ctx.host, score, "Blocking request (threat detected)");
+                        let body = self.render_threat_block_page(session, ctx, reason_text);
+                        let mut resp = ResponseHeader::build(403, Some(3))?;
+                        resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                        resp.insert_header("Content-Length", &body.len().to_string())?;
+                        resp.insert_header("Connection", "close")?;
+                        session.write_response_header(Box::new(resp), false).await?;
+                        session.write_response_body(Some(body), true).await?;
+                        ctx.response_status = 403;
+                        return Ok(true);
+                    } else {
+                        ctx.action = PolicyAction::Log;
+                        debug!(host = %ctx.host, score, "Threat detected in audit mode (not blocked)");
+                    }
+                } else {
+                    ctx.threat_verdict = Some(verdict);
+                }
+            }
+        }
 
         if action == PolicyAction::Block {
             if rt_cfg.prevention_mode {
@@ -606,9 +660,7 @@ impl ProxyHttp for ClearGateProxy {
                 resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
                 resp.insert_header("Content-Length", &body.len().to_string())?;
                 resp.insert_header("Connection", "close")?;
-                session
-                    .write_response_header(Box::new(resp), false)
-                    .await?;
+                session.write_response_header(Box::new(resp), false).await?;
                 session.write_response_body(Some(body), true).await?;
                 ctx.response_status = 403;
                 return Ok(true);
@@ -636,11 +688,7 @@ impl ProxyHttp for ClearGateProxy {
         if let Some(ref router) = self.upstream_router {
             if let Some((addr, _group_name)) = router.find_upstream(&ctx.host) {
                 tracing::debug!(addr = %addr, group = %_group_name, "LB selected in upstream_peer");
-                let mut peer = HttpPeer::new(
-                    addr,
-                    tls,
-                    ctx.host.clone(),
-                );
+                let mut peer = HttpPeer::new(addr, tls, ctx.host.clone());
                 // LB backends are operator-configured internal servers —
                 // skip TLS cert verification (they often use self-signed certs)
                 peer.options.verify_cert = false;
@@ -660,43 +708,62 @@ impl ProxyHttp for ClearGateProxy {
         let sock_addr = if let Some(ref dns) = self.dns_cache {
             dns.resolve(&ctx.host, ctx.port).await.map_err(|e| {
                 pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
-                    .more_context(format!("DNS resolution failed for {}:{} — {e}", ctx.host, ctx.port))
+                    .more_context(format!(
+                        "DNS resolution failed for {}:{} — {e}",
+                        ctx.host, ctx.port
+                    ))
             })?
         } else {
-            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((ctx.host.as_str(), ctx.port))
-                .await
-                .map_err(|e| {
-                    pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
-                        .more_context(format!("DNS resolution failed for {}:{} — {e}", ctx.host, ctx.port))
-                })?
-                .collect();
+            let addrs: Vec<std::net::SocketAddr> =
+                tokio::net::lookup_host((ctx.host.as_str(), ctx.port))
+                    .await
+                    .map_err(|e| {
+                        pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
+                            .more_context(format!(
+                                "DNS resolution failed for {}:{} — {e}",
+                                ctx.host, ctx.port
+                            ))
+                    })?
+                    .collect();
             // Apply ip_version filtering from dns config
-            let ip_ver = self.dns_cache.as_ref()
+            let ip_ver = self
+                .dns_cache
+                .as_ref()
                 .map(|d| d.ip_version())
                 .unwrap_or(conduit_common::dns::IpVersion::V4Preferred);
-            ip_ver.pick_first(&addrs)
-                .ok_or_else(|| {
-                    pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
-                        .more_context(format!("No addresses found for {}:{}", ctx.host, ctx.port))
-                })?
+            ip_ver.pick_first(&addrs).ok_or_else(|| {
+                pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
+                    .more_context(format!("No addresses found for {}:{}", ctx.host, ctx.port))
+            })?
         };
 
         // SSRF protection: reject connections to private/loopback IPs (skip for LB-routed traffic
-        // since those are intentional internal backends configured by the operator)
-        if !ctx.lb_routed && crate::mitm::tunnel::is_private_ip(sock_addr.ip()) {
-            return Err(pingora_error::Error::new(
-                pingora_error::ErrorType::ConnectProxyFailure,
-            ).more_context(format!(
-                "Blocked connection to private IP {} (SSRF protection)",
-                sock_addr
-            )));
+        // or destinations permitted by the allowlist)
+        let is_allowed = self
+            .config
+            .allowlist
+            .as_ref()
+            .map(|a| {
+                a.is_allowed(
+                    &ctx.host,
+                    ctx.port,
+                    Some(sock_addr.ip()),
+                    Some(&ctx.client_ip),
+                )
+            })
+            .unwrap_or(false);
+
+        if !ctx.lb_routed && !is_allowed && crate::mitm::tunnel::is_private_ip(sock_addr.ip()) {
+            return Err(
+                pingora_error::Error::new(pingora_error::ErrorType::ConnectProxyFailure)
+                    .more_context(format!(
+                        "Blocked connection to private IP {} (SSRF protection)",
+                        sock_addr
+                    )),
+            );
         }
 
-        let mut peer = HttpPeer::new(
-            sock_addr,
-            tls,
-            ctx.host.clone(),
-        );
+        let mut peer = HttpPeer::new(sock_addr, tls, ctx.host.clone());
         peer.options.connection_timeout = Some(self.connect_timeout());
         peer.options.total_connection_timeout = Some(self.total_connection_timeout());
         peer.options.read_timeout = Some(self.read_timeout());
@@ -736,7 +803,9 @@ impl ProxyHttp for ClearGateProxy {
 
             // Request body size limit — send a clean 413 response before returning error
             if let Some(ref limits) = self.config.request_limits {
-                if limits.max_request_body_size > 0 && ctx.request_body_accumulated > limits.max_request_body_size {
+                if limits.max_request_body_size > 0
+                    && ctx.request_body_accumulated > limits.max_request_body_size
+                {
                     let mut resp = ResponseHeader::build(413, Some(1))?;
                     resp.insert_header("Content-Length", "0")?;
                     resp.insert_header("Connection", "close")?;
@@ -744,16 +813,18 @@ impl ProxyHttp for ClearGateProxy {
                     ctx.response_status = 413;
                     ctx.action = PolicyAction::Block;
                     ctx.block_reason = Some(BlockReason::RequestTooLarge);
-                    return Err(pingora_error::Error::new(pingora_error::ErrorType::HTTPStatus(413))
-                        .more_context("Request body too large"));
+                    return Err(
+                        pingora_error::Error::new(pingora_error::ErrorType::HTTPStatus(413))
+                            .more_context("Request body too large"),
+                    );
                 }
             }
 
             // Buffer for DLP scanning (lazy init on first body chunk)
             if let Some(ref dlp) = self.dlp_engine {
-                let buf = ctx.dlp_body_buffer.get_or_insert_with(|| {
-                    Vec::with_capacity(dlp.max_scan_size.min(8192))
-                });
+                let buf = ctx
+                    .dlp_body_buffer
+                    .get_or_insert_with(|| Vec::with_capacity(dlp.max_scan_size.min(8192)));
                 let remaining = dlp.max_scan_size.saturating_sub(buf.len());
                 if remaining > 0 {
                     buf.extend_from_slice(&b[..b.len().min(remaining)]);
@@ -768,11 +839,12 @@ impl ProxyHttp for ClearGateProxy {
                     if let Some(ref dlp) = self.dlp_engine {
                         let matches = dlp.scan(&buf);
                         if !matches.is_empty() {
-                            let pattern_names: Vec<String> = matches.iter()
-                                .map(|m| m.pattern_name.clone())
-                                .collect();
+                            let pattern_names: Vec<String> =
+                                matches.iter().map(|m| m.pattern_name.clone()).collect();
                             ctx.dlp_matches = Some(pattern_names);
-                            if let Some(snippet) = matches.iter().find_map(|m| m.matched_snippet.as_ref()) {
+                            if let Some(snippet) =
+                                matches.iter().find_map(|m| m.matched_snippet.as_ref())
+                            {
                                 ctx.dlp_matched_snippet = Some(snippet.clone());
                             }
 
@@ -787,8 +859,10 @@ impl ProxyHttp for ClearGateProxy {
                                 session.write_response_header(Box::new(resp), false).await?;
                                 session.write_response_body(Some(body), true).await?;
                                 ctx.response_status = 403;
-                                return Err(pingora_error::Error::new(pingora_error::ErrorType::HTTPStatus(403))
-                                    .more_context("DLP violation: sensitive data detected"));
+                                return Err(pingora_error::Error::new(
+                                    pingora_error::ErrorType::HTTPStatus(403),
+                                )
+                                .more_context("DLP violation: sensitive data detected"));
                             }
                         }
                     }
@@ -800,29 +874,61 @@ impl ProxyHttp for ClearGateProxy {
     }
 
     /// Enable caching for cacheable GET/HEAD requests.
-    fn request_cache_filter(
-        &self,
-        session: &mut Session,
-        ctx: &mut Self::CTX,
-    ) -> Result<()> {
+    fn request_cache_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
         if let Some(storage) = self.cache_storage {
             // Skip cache for load-balanced domains — each request must reach upstream
             // for round-robin distribution to work.
-            let lb_domain = self.upstream_router.as_ref()
+            let lb_domain = self
+                .upstream_router
+                .as_ref()
                 .map(|r| r.matches_domain(&ctx.host))
                 .unwrap_or(false);
-            let is_pkg = self.package_scanner.as_ref()
-                .map(|s| s.enabled && crate::package_scanner::PackageScanner::is_package_download(&ctx.host, &ctx.path, None))
+            let is_pkg = self
+                .package_scanner
+                .as_ref()
+                .map(|s| {
+                    s.enabled
+                        && crate::package_scanner::PackageScanner::is_package_download(
+                            &ctx.host, &ctx.path, None,
+                        )
+                })
                 .unwrap_or(false);
-            if !ctx.is_connect && !lb_domain && !is_pkg && filters::request_cacheable(session.req_header()) {
-                session.cache.enable(
-                    storage,
-                    self.cache_eviction,
-                    None,
-                    self.cache_lock,
-                    None,
-                );
-                session.cache.set_max_file_size_bytes(self.cache_max_file_size);
+            let is_allowlisted = self
+                .config
+                .allowlist
+                .as_ref()
+                .map(|a| a.is_allowed(&ctx.host, ctx.port, None, Some(&ctx.client_ip)))
+                .unwrap_or(false);
+
+            let req = session.req_header();
+            let has_auth = req.headers.contains_key("authorization")
+                || req.headers.contains_key("proxy-authorization")
+                || req.headers.contains_key("cookie");
+
+            let is_auth_path = ctx.path.starts_with("/oauth")
+                || ctx.path.starts_with("/v1/oauth")
+                || ctx.path.starts_with("/api/auth")
+                || ctx.path.starts_with("/login")
+                || ctx.path.starts_with("/logout")
+                || ctx.path.starts_with("/signin")
+                || ctx.path.starts_with("/signup")
+                || ctx.path.contains("/authorize")
+                || ctx.path.contains("/callback");
+
+            if !ctx.is_connect
+                && !lb_domain
+                && !is_pkg
+                && !is_allowlisted
+                && !has_auth
+                && !is_auth_path
+                && filters::request_cacheable(req)
+            {
+                session
+                    .cache
+                    .enable(storage, self.cache_eviction, None, self.cache_lock, None);
+                session
+                    .cache
+                    .set_max_file_size_bytes(self.cache_max_file_size);
                 ctx.cache_enabled = true;
             }
         }
@@ -837,16 +943,52 @@ impl ProxyHttp for ClearGateProxy {
 
     fn response_cache_filter(
         &self,
-        _session: &Session,
+        session: &Session,
         resp: &ResponseHeader,
         _ctx: &mut Self::CTX,
     ) -> Result<RespCacheable> {
+        let req = session.req_header();
+        let has_auth = req.headers.contains_key("authorization")
+            || req.headers.contains_key("proxy-authorization")
+            || req.headers.contains_key("cookie");
+
+        // Never cache responses that set cookies (session establishment)
+        if resp.headers.contains_key("set-cookie") {
+            return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                "set-cookie",
+            )));
+        }
+
         let cc = CacheControl::from_resp_headers(resp);
-        let has_auth = false;
+        // Never cache private or no-store or no-cache responses
+        if let Some(ref c) = cc {
+            if c.private() || c.no_store() || c.no_cache() {
+                return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                    "private/no-store",
+                )));
+            }
+        }
+
+        if has_auth {
+            let is_public = cc.as_ref().map(|c| c.public()).unwrap_or(false);
+            if !is_public {
+                return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                    "authenticated",
+                )));
+            }
+        }
+
         if let Some(defaults) = self.cache_meta_defaults {
-            Ok(filters::resp_cacheable(cc.as_ref(), resp.clone(), has_auth, defaults))
+            Ok(filters::resp_cacheable(
+                cc.as_ref(),
+                resp.clone(),
+                has_auth,
+                defaults,
+            ))
         } else {
-            Ok(RespCacheable::Uncacheable(NoCacheReason::Custom("no defaults")))
+            Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                "no defaults",
+            )))
         }
     }
 
@@ -869,10 +1011,28 @@ impl ProxyHttp for ClearGateProxy {
                     ctx.upstream_addr = Some(addr.to_string());
 
                     if let Some(inet) = addr.as_inet() {
-                        if !ctx.lb_routed && crate::mitm::tunnel::is_private_ip(inet.ip()) {
+                        let is_allowed = self
+                            .config
+                            .allowlist
+                            .as_ref()
+                            .map(|a| {
+                                a.is_allowed(
+                                    &ctx.host,
+                                    ctx.port,
+                                    Some(inet.ip()),
+                                    Some(&ctx.client_ip),
+                                )
+                            })
+                            .unwrap_or(false);
+
+                        if !ctx.lb_routed
+                            && !is_allowed
+                            && crate::mitm::tunnel::is_private_ip(inet.ip())
+                        {
                             return Err(pingora_error::Error::new(
                                 pingora_error::ErrorType::ConnectProxyFailure,
-                            ).more_context(format!(
+                            )
+                            .more_context(format!(
                                 "Blocked connection to private IP {} (SSRF protection)",
                                 inet
                             )));
@@ -931,10 +1091,16 @@ impl ProxyHttp for ClearGateProxy {
         {
             use crate::threat::heuristics::SecurityHeaders;
             ctx.security_headers = Some(SecurityHeaders {
-                has_hsts: upstream_response.headers.contains_key("strict-transport-security"),
-                has_csp: upstream_response.headers.contains_key("content-security-policy"),
+                has_hsts: upstream_response
+                    .headers
+                    .contains_key("strict-transport-security"),
+                has_csp: upstream_response
+                    .headers
+                    .contains_key("content-security-policy"),
                 has_xfo: upstream_response.headers.contains_key("x-frame-options"),
-                has_xcto: upstream_response.headers.contains_key("x-content-type-options"),
+                has_xcto: upstream_response
+                    .headers
+                    .contains_key("x-content-type-options"),
             });
         }
 
@@ -959,14 +1125,18 @@ impl ProxyHttp for ClearGateProxy {
 
         if let Some(ref engine) = self.threat_engine {
             if engine.config.tier2_enabled {
-                let t1_escalated = ctx.threat_verdict.as_ref()
+                let t1_escalated = ctx
+                    .threat_verdict
+                    .as_ref()
                     .map(|v| v.tier_reached >= conduit_common::types::ThreatTier::Tier1)
                     .unwrap_or(false);
 
                 let ct = ctx.response_content_type.as_deref().unwrap_or("");
                 let is_inspectable = ct.contains("html") || ct.contains("javascript");
 
-                let has_any_threat_score = ctx.threat_verdict.as_ref()
+                let has_any_threat_score = ctx
+                    .threat_verdict
+                    .as_ref()
                     .map(|v| v.score > 0.05)
                     .unwrap_or(false);
 
@@ -1070,8 +1240,11 @@ impl ProxyHttp for ClearGateProxy {
                                     action = ?scanner.action,
                                     "Package supply-chain threat detected"
                                 );
-                                ctx.package_threat_match = Some((threat.rule_name.clone(), threat.infected_file.clone()));
-                                if scanner.action == crate::package_scanner::PackageScanAction::Block {
+                                ctx.package_threat_match =
+                                    Some((threat.rule_name.clone(), threat.infected_file.clone()));
+                                if scanner.action
+                                    == crate::package_scanner::PackageScanAction::Block
+                                {
                                     ctx.action = PolicyAction::Block;
                                     ctx.block_reason = Some(BlockReason::PackageMalware);
                                     ctx.response_status = 403;
@@ -1083,7 +1256,9 @@ impl ProxyHttp for ClearGateProxy {
                                         pingora_core::ErrorType::HTTPStatus(403),
                                         format!(
                                             "Package download blocked: {} ({}) in {}",
-                                            threat.description, threat.rule_name, threat.infected_file
+                                            threat.description,
+                                            threat.rule_name,
+                                            threat.infected_file
                                         ),
                                     ));
                                 } else {
@@ -1143,17 +1318,24 @@ impl ProxyHttp for ClearGateProxy {
                                             tier0_score: verdict.score,
                                             tier1_score: Some(verdict.score),
                                             tier2_score: Some(t2_score),
-                                            reputation_score: verdict.reputation_score.unwrap_or(0.5),
+                                            reputation_score: verdict
+                                                .reputation_score
+                                                .unwrap_or(0.5),
                                             reply_tx: None,
                                         };
                                         let _ = llm_tx.try_send(llm_req);
-                                        verdict.tier_reached = conduit_common::types::ThreatTier::Tier3;
+                                        verdict.tier_reached =
+                                            conduit_common::types::ThreatTier::Tier3;
                                     }
                                 }
 
-                                if !is_trusted && verdict.score >= engine.config.tier0_block_threshold {
+                                if !is_trusted
+                                    && verdict.score >= engine.config.tier0_block_threshold
+                                {
                                     if let Some(ref client_addr) = ctx.mitm_client_addr {
-                                        if let Some(mut mc) = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr) {
+                                        if let Some(mut mc) =
+                                            crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr)
+                                        {
                                             mc.tunnel_killed = true;
                                         }
                                     }
@@ -1165,7 +1347,8 @@ impl ProxyHttp for ClearGateProxy {
             }
 
             if let Some(ref client_addr) = ctx.mitm_client_addr {
-                let tunnel_eval = crate::mitm::stream::MITM_CONTEXTS.get_mut(client_addr)
+                let tunnel_eval = crate::mitm::stream::MITM_CONTEXTS
+                    .get_mut(client_addr)
                     .and_then(|mut mc| {
                         if mc.tunnel_patterns.t2_fired {
                             return None;
@@ -1178,13 +1361,11 @@ impl ProxyHttp for ClearGateProxy {
                 if let Some(tunnel_score) = tunnel_eval {
                     if let Some(ref mut verdict) = ctx.threat_verdict {
                         verdict.score = (verdict.score + tunnel_score).min(1.0);
-                        verdict.signals.push(
-                            conduit_common::types::ThreatSignal {
-                                name: format!("tunnel_pattern_phishing (score: {tunnel_score:.2})"),
-                                score: tunnel_score,
-                                tier: conduit_common::types::ThreatTier::Tier2,
-                            },
-                        );
+                        verdict.signals.push(conduit_common::types::ThreatSignal {
+                            name: format!("tunnel_pattern_phishing (score: {tunnel_score:.2})"),
+                            score: tunnel_score,
+                            tier: conduit_common::types::ThreatTier::Tier2,
+                        });
                     }
                 }
             }
@@ -1212,7 +1393,9 @@ impl ProxyHttp for ClearGateProxy {
             block_reason_str.as_deref(),
         );
         if let Some(ref verdict) = ctx.threat_verdict {
-            crate::metrics::record_threat_eval(&format!("{:?}", verdict.tier_reached).to_lowercase());
+            crate::metrics::record_threat_eval(
+                &format!("{:?}", verdict.tier_reached).to_lowercase(),
+            );
         }
 
         let entry = LogEntry {
@@ -1245,12 +1428,62 @@ impl ProxyHttp for ClearGateProxy {
             threat_blocked: ctx.threat_verdict.as_ref().map(|v| v.blocked),
             block_reason: ctx.block_reason,
             rule_name: ctx.rule_name.clone(),
-            threat_signals: ctx.threat_verdict.as_ref()
+            threat_signals: ctx
+                .threat_verdict
+                .as_ref()
                 .filter(|v| !v.signals.is_empty())
                 .map(|v| v.signals.clone()),
             dlp_matches: ctx.dlp_matches.take(),
         };
 
         self.log_tx.send(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_auth_path_detection() {
+        let auth_paths = [
+            "/oauth/authorize",
+            "/v1/oauth/a3e5229a-1060-44d8-bbbc-24944c1c9d73/authorize?client_id=123",
+            "/api/auth/login",
+            "/login",
+            "/login?reauth=1",
+            "/logout",
+            "/callback?code=xyz",
+        ];
+        for path in auth_paths {
+            let is_auth = path.starts_with("/oauth")
+                || path.starts_with("/v1/oauth")
+                || path.starts_with("/api/auth")
+                || path.starts_with("/login")
+                || path.starts_with("/logout")
+                || path.starts_with("/signin")
+                || path.starts_with("/signup")
+                || path.contains("/authorize")
+                || path.contains("/callback");
+            assert!(is_auth, "expected {path} to be detected as auth path");
+        }
+
+        let non_auth_paths = [
+            "/assets/main.css",
+            "/images/logo.png",
+            "/index.html",
+            "/v1/models",
+        ];
+        for path in non_auth_paths {
+            let is_auth = path.starts_with("/oauth")
+                || path.starts_with("/v1/oauth")
+                || path.starts_with("/api/auth")
+                || path.starts_with("/login")
+                || path.starts_with("/logout")
+                || path.starts_with("/signin")
+                || path.starts_with("/signup")
+                || path.contains("/authorize")
+                || path.contains("/callback");
+            assert!(!is_auth, "expected {path} to NOT be detected as auth path");
+        }
     }
 }

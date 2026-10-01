@@ -34,9 +34,7 @@ struct CachedCategory {
 
 static CATEGORY_CACHE: once_cell::sync::Lazy<Mutex<LruCache<String, CachedCategory>>> =
     once_cell::sync::Lazy::new(|| {
-        Mutex::new(LruCache::new(
-            NonZeroUsize::new(CACHE_CAPACITY).unwrap(),
-        ))
+        Mutex::new(LruCache::new(NonZeroUsize::new(CACHE_CAPACITY).unwrap()))
     });
 
 /// Invalidate the category cache so the next lookup fetches fresh data.
@@ -90,7 +88,10 @@ pub async fn lookup_category(pool: &Arc<Pool>, domain: &str) -> Option<String> {
 
     // Full map not loaded yet — fall back to LRU cache + Redis
     // If pub/sub signalled a reload, flush the entire cache
-    if FORCE_RELOAD.compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+    if FORCE_RELOAD
+        .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
         CATEGORY_CACHE.lock().clear();
     }
 

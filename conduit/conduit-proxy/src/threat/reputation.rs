@@ -42,9 +42,7 @@ const DEFAULT_CACHE_CAP: usize = 10_000;
 
 /// Create a new reputation LRU cache.
 pub fn new_cache() -> Mutex<LruCache<String, CachedReputation>> {
-    Mutex::new(LruCache::new(
-        NonZeroUsize::new(DEFAULT_CACHE_CAP).unwrap(),
-    ))
+    Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CACHE_CAP).unwrap()))
 }
 
 /// Cached reputation entry with a short TTL.
@@ -76,10 +74,7 @@ pub fn get_cached_score(
 
 /// Seed the LRU cache from Redis on startup so Tier 0 has reputation data
 /// immediately without needing async calls in the hot path.
-pub async fn seed_cache_from_redis(
-    cache: &Mutex<LruCache<String, CachedReputation>>,
-    pool: &Pool,
-) {
+pub async fn seed_cache_from_redis(cache: &Mutex<LruCache<String, CachedReputation>>, pool: &Pool) {
     let Ok(mut conn) = pool.get().await else {
         return;
     };
@@ -99,16 +94,16 @@ pub async fn seed_cache_from_redis(
     }
 
     if loaded > 0 {
-        debug!(loaded, total = domains.len(), "Seeded reputation cache from Redis");
+        debug!(
+            loaded,
+            total = domains.len(),
+            "Seeded reputation cache from Redis"
+        );
     }
 }
 
 /// Insert a reputation score into the cache.
-pub fn cache_score(
-    cache: &Mutex<LruCache<String, CachedReputation>>,
-    domain: String,
-    score: f32,
-) {
+pub fn cache_score(cache: &Mutex<LruCache<String, CachedReputation>>, domain: String, score: f32) {
     let mut guard = cache.lock();
     guard.put(
         domain,
@@ -136,7 +131,9 @@ pub async fn update_from_log(
     cache: Option<&Mutex<LruCache<String, CachedReputation>>>,
 ) {
     let was_blocked = entry.threat_blocked.unwrap_or(false);
-    let tier = entry.threat_tier.unwrap_or(conduit_common::types::ThreatTier::Tier0);
+    let tier = entry
+        .threat_tier
+        .unwrap_or(conduit_common::types::ThreatTier::Tier0);
 
     // Tier 2+ content analysis — real findings about domain content
     let dominated_by_content = tier >= conduit_common::types::ThreatTier::Tier2;
@@ -252,7 +249,12 @@ pub async fn update_from_log(
             let _: Result<(), _> = conn.hset(&rep_key, "score", final_score).await;
         }
 
-        debug!(domain, score = final_score, unique_users, "Updated reputation");
+        debug!(
+            domain,
+            score = final_score,
+            unique_users,
+            "Updated reputation"
+        );
 
         // Write back to in-process LRU cache so Tier 0 sees it immediately
         if let Some(cache) = cache {
@@ -264,10 +266,7 @@ pub async fn update_from_log(
 /// Spawn a background thread that periodically syncs reputation scores from Redis
 /// into the local LRU cache. This ensures all proxy nodes converge on the same
 /// reputation data within 30s, even when a user's connections shift between nodes.
-pub fn spawn_reputation_sync(
-    engine: Arc<super::ThreatEngine>,
-    pool: Arc<Pool>,
-) {
+pub fn spawn_reputation_sync(engine: Arc<super::ThreatEngine>, pool: Arc<Pool>) {
     std::thread::Builder::new()
         .name("cleargate-reputation-sync".into())
         .spawn(move || {
@@ -293,10 +292,7 @@ pub fn spawn_reputation_sync(
 
 /// Pull all reputation scores from Redis and update the LRU cache.
 /// Uses pipelining to minimize round-trips: one SMEMBERS + batched HGET.
-async fn sync_from_redis(
-    cache: &Mutex<LruCache<String, CachedReputation>>,
-    pool: &Pool,
-) {
+async fn sync_from_redis(cache: &Mutex<LruCache<String, CachedReputation>>, pool: &Pool) {
     let Ok(mut conn) = pool.get().await else {
         error!("Reputation sync: failed to get Redis connection");
         return;

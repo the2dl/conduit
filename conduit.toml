@@ -148,3 +148,40 @@ dragonfly_url = "redis://127.0.0.1:6380"
 name = "mars-local"
 heartbeat_interval_secs = 10
 
+# --- Allowlist (Bypass SSRF protection, caching, and inspection for trusted targets) ---
+[allowlist]
+allow_loopback = true                    # Permits loopback traffic (localhost, 127.0.0.1, ::1)
+min_loopback_port = 1024                 # Blocks privileged system ports (< 1024)
+blocked_loopback_ports = [22, 2375, 2376, 3306, 5432, 6379, 6380, 11211, 27017] # Block sensitive DB/daemon ports
+only_local_clients_for_loopback = true   # Prevent remote LAN clients from proxying into host loopback
+hosts = [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "mtalk.google.com",
+]
+
+# --- Outbound Egress Port Restrictions ---
+[egress]
+# Allowed destination ports for CONNECT tunneling (HTTPS, WebSocket, Kubernetes API 6443).
+# Non-allowlisted external traffic attempting to tunnel to other ports (e.g. 1234) is rejected.
+allowed_connect_ports = [443, 8443, 6443]
+# Allowed destination ports for plain HTTP proxying.
+allowed_http_ports = [80, 8080]
+
+# --- Desktop Notifications & Alert Muting ---
+[notifications]
+enabled = true
+min_interval_secs = 2
+# Domains or wildcard patterns where desktop notifications are silenced
+# (Requests are still enforced and logged, but no toasts appear on screen)
+muted_domains = [
+    "browser-intake-us5-datadoghq.com",
+    "*.datadoghq.com",
+    "static.cloudflareinsights.com",
+    "*.cloudflareinsights.com",
+    "*.simpleanalyticscdn.com",
+]
+
+
+

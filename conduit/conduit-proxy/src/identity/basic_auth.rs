@@ -18,17 +18,13 @@ pub async fn try_basic_auth(session: &Session, pool: &Arc<Pool>) -> Option<UserI
 /// Parse a raw Proxy-Authorization header value and validate credentials.
 /// Used by both HTTP proxy path and CONNECT tunnel path.
 pub async fn try_basic_auth_from_header(auth_str: &str, pool: &Arc<Pool>) -> Option<UserIdentity> {
-
     if !auth_str.starts_with("Basic ") {
         return None;
     }
 
     let encoded = &auth_str["Basic ".len()..];
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        encoded,
-    )
-    .ok()?;
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
     let decoded_str = String::from_utf8(decoded).ok()?;
 
     let (username, password) = decoded_str.split_once(':')?;
@@ -68,7 +64,10 @@ async fn validate_credentials(pool: &Arc<Pool>, username: &str, password: &str) 
                      htpasswd -nBC 12 '' | tr -d ':\\n' | redis-cli -x HSET {key} password_hash"
                 );
                 constant_time_eq(plain.as_bytes(), password.as_bytes())
-            } else if hash.starts_with("$2b$") || hash.starts_with("$2a$") || hash.starts_with("$2y$") {
+            } else if hash.starts_with("$2b$")
+                || hash.starts_with("$2a$")
+                || hash.starts_with("$2y$")
+            {
                 // bcrypt hash — verify using bcrypt (blocking work offloaded to spawn_blocking)
                 let password = password.to_string();
                 let hash = hash.clone();

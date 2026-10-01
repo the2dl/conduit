@@ -1,4 +1,5 @@
 pub mod dragonfly;
+pub mod notify;
 pub mod syslog;
 
 use conduit_common::config::ClearGateConfig;
@@ -124,10 +125,13 @@ async fn run_logging_pipeline(
         }
 
         // Track stats locally (flushed to Redis periodically by stats task)
-        crate::stats::record_request(
-            entry.action == conduit_common::types::PolicyAction::Block,
-            entry.tls_intercepted,
-        );
+        let is_blocked = entry.action == conduit_common::types::PolicyAction::Block;
+        crate::stats::record_request(is_blocked, entry.tls_intercepted);
+
+        // Emit desktop notification for blocked requests on the local host (with noise reduction & stacking)
+        if is_blocked {
+            notify::on_blocked_entry(&entry);
+        }
 
         // Track policy hits in Redis
         if let Some(ref rid) = entry.rule_id {
@@ -166,10 +170,7 @@ async fn run_logging_pipeline(
         // Track threat stats
         if let Some(tier) = entry.threat_tier {
             if tier != ThreatTier::None {
-                crate::stats::record_threat(
-                    entry.threat_blocked.unwrap_or(false),
-                    tier,
-                );
+                crate::stats::record_threat(entry.threat_blocked.unwrap_or(false), tier);
             }
         }
 
@@ -179,7 +180,10 @@ async fn run_logging_pipeline(
         {
             let cache_ref = threat_engine.as_ref().map(|e| &e.reputation_cache);
             crate::threat::reputation::update_from_log(
-                &pool, &entry, threat_decay_hours, cache_ref,
+                &pool,
+                &entry,
+                threat_decay_hours,
+                cache_ref,
             )
             .await;
         }
@@ -190,8 +194,7 @@ async fn run_logging_pipeline(
         }
 
         // Dragonfly stream sink (XADD only — stats handled by flush task)
-        if let Err(e) =
-            dragonfly::push_log(&pool, &entry, log_retention, node_id.as_deref()).await
+        if let Err(e) = dragonfly::push_log(&pool, &entry, log_retention, node_id.as_deref()).await
         {
             error!("Dragonfly log push failed: {e}");
         }

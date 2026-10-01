@@ -47,8 +47,7 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
             };
 
             // Per-node breakdown
-            let node_ids: Vec<String> =
-                conn.smembers(keys::NODES_INDEX).await.unwrap_or_default();
+            let node_ids: Vec<String> = conn.smembers(keys::NODES_INDEX).await.unwrap_or_default();
 
             let mut nodes = Vec::new();
             for nid in &node_ids {
@@ -66,10 +65,7 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StatsResponse> {
                     .get(keys::stats_node(nid, "blocked"))
                     .await
                     .unwrap_or(0);
-                let n_tls: u64 = conn
-                    .get(keys::stats_node(nid, "tls"))
-                    .await
-                    .unwrap_or(0);
+                let n_tls: u64 = conn.get(keys::stats_node(nid, "tls")).await.unwrap_or(0);
 
                 // Check heartbeat for online status and active connections
                 let hb_key = keys::node_heartbeat(nid);

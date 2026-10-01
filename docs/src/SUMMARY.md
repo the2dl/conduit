@@ -24,6 +24,7 @@
 - [Load Balancing](./features/load-balancing.md)
 - [DNS Caching](./features/dns-caching.md)
 - [Metrics & Monitoring](./features/metrics.md)
+- [Egress Lockdown & Port Filtering](./features/egress-lockdown.md)
 
 # Management
 

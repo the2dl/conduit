@@ -39,7 +39,10 @@ pub fn escape_sd_value(s: &str) -> String {
 pub fn csv_escape(s: &str) -> String {
     let escaped = s.replace('"', "\"\"");
     let first = escaped.chars().next();
-    let needs_prefix = matches!(first, Some('=' | '+' | '-' | '@' | '|' | '\t' | '\r' | '\n'));
+    let needs_prefix = matches!(
+        first,
+        Some('=' | '+' | '-' | '@' | '|' | '\t' | '\r' | '\n')
+    );
     if needs_prefix {
         format!("\"'{}\"", escaped)
     } else {

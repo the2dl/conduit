@@ -28,22 +28,32 @@ impl RateLimiter {
         let slots = config.estimator_slots;
 
         let per_ip = if config.per_ip_limit > 0 {
-            Some(Arc::new(Rate::new_with_estimator_config(interval, hashes, slots)))
+            Some(Arc::new(Rate::new_with_estimator_config(
+                interval, hashes, slots,
+            )))
         } else {
             None
         };
         let per_user = if config.per_user_limit > 0 {
-            Some(Arc::new(Rate::new_with_estimator_config(interval, hashes, slots)))
+            Some(Arc::new(Rate::new_with_estimator_config(
+                interval, hashes, slots,
+            )))
         } else {
             None
         };
         let per_destination = if config.per_destination_limit > 0 {
-            Some(Arc::new(Rate::new_with_estimator_config(interval, hashes, slots)))
+            Some(Arc::new(Rate::new_with_estimator_config(
+                interval, hashes, slots,
+            )))
         } else {
             None
         };
 
-        if config.enabled && config.per_ip_limit == 0 && config.per_user_limit == 0 && config.per_destination_limit == 0 {
+        if config.enabled
+            && config.per_ip_limit == 0
+            && config.per_user_limit == 0
+            && config.per_destination_limit == 0
+        {
             warn!("Rate limiting is enabled but all limits are 0 (unlimited)");
         }
 

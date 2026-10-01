@@ -17,17 +17,74 @@ use super::entropy::shannon_entropy;
 static TRUSTED_TLDS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
         // Legacy gTLDs
-        "com", "org", "net", "edu", "gov", "mil", "int",
+        "com",
+        "org",
+        "net",
+        "edu",
+        "gov",
+        "mil",
+        "int",
         // Country codes with strong registration policies
-        "us", "uk", "ca", "au", "de", "fr", "nl", "se", "no", "dk", "fi",
-        "ch", "at", "be", "ie", "nz", "jp", "kr", "sg", "il",
+        "us",
+        "uk",
+        "ca",
+        "au",
+        "de",
+        "fr",
+        "nl",
+        "se",
+        "no",
+        "dk",
+        "fi",
+        "ch",
+        "at",
+        "be",
+        "ie",
+        "nz",
+        "jp",
+        "kr",
+        "sg",
+        "il",
         // Common modern gTLDs with real usage
-        "io", "dev", "app", "co", "me", "ai", "sh", "is", "fm", "tv",
-        "gg", "cc", "ly", "to", "im", "it", "es", "pt", "pl", "cz",
-        "eu", "asia", "pro", "info", "biz", "name", "museum", "coop",
+        "io",
+        "dev",
+        "app",
+        "co",
+        "me",
+        "ai",
+        "sh",
+        "is",
+        "fm",
+        "tv",
+        "gg",
+        "cc",
+        "ly",
+        "to",
+        "im",
+        "it",
+        "es",
+        "pt",
+        "pl",
+        "cz",
+        "eu",
+        "asia",
+        "pro",
+        "info",
+        "biz",
+        "name",
+        "museum",
+        "coop",
         // Tech / cloud
-        "cloud", "tech", "systems", "network", "digital", "solutions",
-        "software", "engineering", "design", "studio",
+        "cloud",
+        "tech",
+        "systems",
+        "network",
+        "digital",
+        "solutions",
+        "software",
+        "engineering",
+        "design",
+        "studio",
     ]
     .into_iter()
     .collect()
@@ -111,10 +168,10 @@ static SUSPICIOUS_PATHS: Lazy<RegexSet> = Lazy::new(|| {
         r"(?i)/etc/passwd",
         r"(?i)/etc/shadow",
         r"(?i)/proc/self",
-        r"(?i)\.\./\.\./",              // path traversal
-        r"%25[0-9a-fA-F]{2}",           // double-encoded percent
+        r"(?i)\.\./\.\./",    // path traversal
+        r"%25[0-9a-fA-F]{2}", // double-encoded percent
         r"(?i)/cgi-bin/",
-        r"(?i)\.aspx?\?.*=.*<script",   // XSS attempt
+        r"(?i)\.aspx?\?.*=.*<script", // XSS attempt
     ])
     .expect("invalid suspicious path regex")
 });
@@ -322,14 +379,34 @@ pub fn is_free_hosting(host: &str) -> bool {
 /// Known free hosting / site builder platforms commonly abused for phishing.
 static FREE_HOSTING_DOMAINS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     [
-        "webflow.io", "herokuapp.com", "netlify.app", "vercel.app",
-        "pages.dev", "web.app", "firebaseapp.com", "glitch.me",
-        "replit.dev", "github.io", "gitlab.io", "blogspot.com",
-        "wordpress.com", "wixsite.com", "weebly.com", "carrd.co",
-        "godaddysites.com", "square.site", "myshopify.com",
+        "webflow.io",
+        "herokuapp.com",
+        "netlify.app",
+        "vercel.app",
+        "pages.dev",
+        "web.app",
+        "firebaseapp.com",
+        "glitch.me",
+        "replit.dev",
+        "github.io",
+        "gitlab.io",
+        "blogspot.com",
+        "wordpress.com",
+        "wixsite.com",
+        "weebly.com",
+        "carrd.co",
+        "godaddysites.com",
+        "square.site",
+        "myshopify.com",
         // Dynamic DNS providers (heavily abused for phishing)
-        "duckdns.org", "ddns.net", "hopto.org", "zapto.org",
-        "sytes.net", "no-ip.org", "freedns.org", "dynu.com",
+        "duckdns.org",
+        "ddns.net",
+        "hopto.org",
+        "zapto.org",
+        "sytes.net",
+        "no-ip.org",
+        "freedns.org",
+        "dynu.com",
     ]
     .into_iter()
     .collect()
@@ -337,9 +414,24 @@ static FREE_HOSTING_DOMAINS: Lazy<std::collections::HashSet<&'static str>> = Laz
 
 /// Phishing-related keywords commonly found in subdomain impersonation.
 static PHISHING_KEYWORDS: &[&str] = &[
-    "login", "signin", "sign-in", "sso", "auth", "secure", "verify",
-    "account", "update", "confirm", "banking", "wallet", "recover",
-    "unlock", "suspend", "alert", "notification", "password",
+    "login",
+    "signin",
+    "sign-in",
+    "sso",
+    "auth",
+    "secure",
+    "verify",
+    "account",
+    "update",
+    "confirm",
+    "banking",
+    "wallet",
+    "recover",
+    "unlock",
+    "suspend",
+    "alert",
+    "notification",
+    "password",
 ];
 
 /// Detect phishing subdomain patterns structurally — no brand list needed.
@@ -398,9 +490,15 @@ pub fn suspicious_subdomain(host: &str) -> Vec<ThreatSignal> {
 
     // 3. TLD-like words embedded in subdomain (mimicking URL structure)
     //    e.g., "robinhud-com-auth" has "com" as a word — pretending to be a domain
-    let tld_words = words.iter().filter(|w| {
-        matches!(**w, "com" | "org" | "net" | "io" | "co" | "us" | "uk" | "de")
-    }).count();
+    let tld_words = words
+        .iter()
+        .filter(|w| {
+            matches!(
+                **w,
+                "com" | "org" | "net" | "io" | "co" | "us" | "uk" | "de"
+            )
+        })
+        .count();
     if tld_words > 0 {
         score += 0.2;
         reasons.push("tld_mimicry");
@@ -497,9 +595,9 @@ const WEIGHT_MIXED_SCRIPT: f32 = 0.20;
 const WEIGHT_BRAND_IMPERSONATION: f32 = 0.35;
 const WEIGHT_BLOOM: f32 = 0.60;
 const WEIGHT_NRD: f32 = 0.15;
-const NRD_SCORE_HIGH_ENTROPY: f32 = 0.5;   // NRD + entropy > 4.0 → likely DGA
-const NRD_SCORE_MED_ENTROPY: f32 = 0.3;    // NRD + entropy > 3.2 → suspicious
-const NRD_SCORE_BASELINE: f32 = 0.15;      // NRD alone → mild signal
+const NRD_SCORE_HIGH_ENTROPY: f32 = 0.5; // NRD + entropy > 4.0 → likely DGA
+const NRD_SCORE_MED_ENTROPY: f32 = 0.3; // NRD + entropy > 3.2 → suspicious
+const NRD_SCORE_BASELINE: f32 = 0.15; // NRD alone → mild signal
 const NRD_ENTROPY_HIGH: f32 = 4.0;
 const NRD_ENTROPY_MED: f32 = 3.2;
 const WEIGHT_IP_REP: f32 = 0.25;
@@ -598,7 +696,8 @@ pub fn security_header_score(host: &str, headers: &SecurityHeaders) -> Vec<Threa
         return vec![];
     }
 
-    let all_missing = !headers.has_hsts && !headers.has_csp && !headers.has_xfo && !headers.has_xcto;
+    let all_missing =
+        !headers.has_hsts && !headers.has_csp && !headers.has_xfo && !headers.has_xcto;
     if !all_missing {
         return vec![];
     }
@@ -761,8 +860,7 @@ pub fn evaluate_all(
     // domain is a mild corroborating signal (not enough to flag on its own).
     // Skip for bad TLDs — they already carry a strong tld_risk signal and
     // adding uncategorized would dilute the weighted average.
-    let is_uncategorized = category.is_none()
-        || category == Some("uncategorized");
+    let is_uncategorized = category.is_none() || category == Some("uncategorized");
     if is_uncategorized && !is_bad_tld(host) {
         let sig = ThreatSignal {
             name: "uncategorized".into(),
@@ -789,8 +887,10 @@ pub fn evaluate_all(
     // Require the corroborating signal to have score >= 0.25 to avoid trivial signals
     // (e.g., unknown TLD at 0.15) from pushing bloom false positives to auto-block.
     let has_bloom = signals.iter().any(|s| s.name == "bloom_hit");
-    let has_meaningful_corroboration = has_bloom && signals.iter()
-        .any(|s| s.name != "bloom_hit" && s.score >= 0.25);
+    let has_meaningful_corroboration = has_bloom
+        && signals
+            .iter()
+            .any(|s| s.name != "bloom_hit" && s.score >= 0.25);
     let floor = if has_meaningful_corroboration {
         0.95
     } else if max_raw > 0.5 && signal_count >= 2 {
@@ -813,8 +913,18 @@ mod tests {
     #[test]
     fn safe_domain() {
         let (score, signals) = evaluate_all(
-            "google.com", 443, "/search?q=hello", "https",
-            None, None, 3.5, false, false, false, None, None,
+            "google.com",
+            443,
+            "/search?q=hello",
+            "https",
+            None,
+            None,
+            3.5,
+            false,
+            false,
+            false,
+            None,
+            None,
         );
         assert!(score < 0.3, "google.com score={score}, signals={signals:?}");
     }
@@ -822,8 +932,18 @@ mod tests {
     #[test]
     fn dga_domain() {
         let (score, signals) = evaluate_all(
-            "xk7m2p4q8r1w3z9.tk", 443, "/", "https",
-            None, None, 3.5, false, false, false, None, None,
+            "xk7m2p4q8r1w3z9.tk",
+            443,
+            "/",
+            "https",
+            None,
+            None,
+            3.5,
+            false,
+            false,
+            false,
+            None,
+            None,
         );
         assert!(score > 0.1, "DGA domain score={score}, signals={signals:?}");
     }
@@ -831,8 +951,18 @@ mod tests {
     #[test]
     fn bloom_hit_domain() {
         let (score, _) = evaluate_all(
-            "example.com", 443, "/", "https",
-            None, None, 3.5, true, false, false, None, None,
+            "example.com",
+            443,
+            "/",
+            "https",
+            None,
+            None,
+            3.5,
+            true,
+            false,
+            false,
+            None,
+            None,
         );
         // Bloom hit is ground truth — should score very high even alone
         assert!(score > 0.6, "bloom hit score={score}");
@@ -848,7 +978,10 @@ mod tests {
     fn mixed_script_detection() {
         // g00gle.com has digit substitutions (0→o) which normalize differently
         let sigs = mixed_script_check("g00gle.com");
-        assert!(!sigs.is_empty(), "should detect g00gle.com as mixed-script confusable");
+        assert!(
+            !sigs.is_empty(),
+            "should detect g00gle.com as mixed-script confusable"
+        );
     }
 
     #[test]
@@ -878,7 +1011,11 @@ mod tests {
         // Some obscure TLD not in either list → mild signal
         let sigs = tld_risk("example.horse");
         assert!(!sigs.is_empty());
-        assert!(sigs[0].score < 0.2, "unknown TLD should be mild, got {}", sigs[0].score);
+        assert!(
+            sigs[0].score < 0.2,
+            "unknown TLD should be mild, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -886,14 +1023,22 @@ mod tests {
         // Classic phishing: auth keywords + free hosting + TLD mimicry + long subdomain + dashes
         let sigs = suspicious_subdomain("secure---sso--robinhud-com-auth.webflow.io");
         assert!(!sigs.is_empty(), "should detect phishing subdomain pattern");
-        assert!(sigs[0].score > 0.5, "score should be high, got {}", sigs[0].score);
+        assert!(
+            sigs[0].score > 0.5,
+            "score should be high, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
     fn suspicious_subdomain_heroku_login() {
         let sigs = suspicious_subdomain("paypal-login-verify.herokuapp.com");
         assert!(!sigs.is_empty(), "should detect login phishing on heroku");
-        assert!(sigs[0].score > 0.3, "score should be moderate+, got {}", sigs[0].score);
+        assert!(
+            sigs[0].score > 0.3,
+            "score should be moderate+, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -907,26 +1052,51 @@ mod tests {
     fn suspicious_subdomain_legit_hosting() {
         // Simple app on free hosting — no phishing signals
         let sigs = suspicious_subdomain("myapp.herokuapp.com");
-        assert!(sigs.is_empty() || sigs[0].score < 0.3,
-            "simple app name on hosting shouldn't score high, got {:?}", sigs);
+        assert!(
+            sigs.is_empty() || sigs[0].score < 0.3,
+            "simple app name on hosting shouldn't score high, got {:?}",
+            sigs
+        );
     }
 
     #[test]
     fn suspicious_subdomain_full_pipeline() {
         let (score, signals) = evaluate_all(
-            "secure---sso--robinhud-com-auth.webflow.io", 443, "/", "https",
-            None, None, 3.5, false, false, false, None, None,
+            "secure---sso--robinhud-com-auth.webflow.io",
+            443,
+            "/",
+            "https",
+            None,
+            None,
+            3.5,
+            false,
+            false,
+            false,
+            None,
+            None,
         );
-        assert!(score > 0.4, "phishing domain should score high, got {score}");
-        let sub_sig = signals.iter().find(|s| s.name.starts_with("suspicious_subdomain"));
-        assert!(sub_sig.is_some(), "should have suspicious_subdomain signal, signals={signals:?}");
+        assert!(
+            score > 0.4,
+            "phishing domain should score high, got {score}"
+        );
+        let sub_sig = signals
+            .iter()
+            .find(|s| s.name.starts_with("suspicious_subdomain"));
+        assert!(
+            sub_sig.is_some(),
+            "should have suspicious_subdomain signal, signals={signals:?}"
+        );
     }
 
     #[test]
     fn bad_tld_shop() {
         let sigs = tld_risk("volksbank.shop");
         assert!(!sigs.is_empty());
-        assert!(sigs[0].score >= 0.1, ".shop should be a bad TLD with decent score, got {}", sigs[0].score);
+        assert!(
+            sigs[0].score >= 0.1,
+            ".shop should be a bad TLD with decent score, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -939,7 +1109,11 @@ mod tests {
         };
         let sigs = cert_risk("evil.shop", &meta);
         assert!(!sigs.is_empty(), "should flag free CA + bad TLD");
-        assert!(sigs[0].score >= 0.4, "score should be high (fresh + free CA), got {}", sigs[0].score);
+        assert!(
+            sigs[0].score >= 0.4,
+            "score should be high (fresh + free CA), got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -963,8 +1137,15 @@ mod tests {
             has_xcto: false,
         };
         let sigs = security_header_score("evil.shop", &headers);
-        assert!(!sigs.is_empty(), "missing all headers on bad TLD should flag");
-        assert!(sigs[0].score >= 0.2, "score should be >= 0.2, got {}", sigs[0].score);
+        assert!(
+            !sigs.is_empty(),
+            "missing all headers on bad TLD should flag"
+        );
+        assert!(
+            sigs[0].score >= 0.2,
+            "score should be >= 0.2, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -976,15 +1157,28 @@ mod tests {
             has_xcto: false,
         };
         let sigs = security_header_score("example.com", &headers);
-        assert!(sigs.is_empty(), "missing headers on trusted TLD should not flag");
+        assert!(
+            sigs.is_empty(),
+            "missing headers on trusted TLD should not flag"
+        );
     }
 
     #[test]
     fn phishing_domain_logwindoww_top() {
         // Confirmed phishing site — should score high enough to trigger T2 inspection
         let (score, signals) = evaluate_all(
-            "mobile.logwindoww.top", 443, "/", "https",
-            None, None, 3.5, false, false, false, None, None,
+            "mobile.logwindoww.top",
+            443,
+            "/",
+            "https",
+            None,
+            None,
+            3.5,
+            false,
+            false,
+            false,
+            None,
+            None,
         );
         assert!(
             score >= 0.5,
@@ -995,8 +1189,15 @@ mod tests {
     #[test]
     fn phishing_keywords_sso_auth() {
         let sigs = phishing_keywords_in_domain("sso-auth.com");
-        assert!(!sigs.is_empty(), "sso-auth.com should flag phishing keywords");
-        assert!(sigs[0].score >= 0.3, "score should be meaningful, got {}", sigs[0].score);
+        assert!(
+            !sigs.is_empty(),
+            "sso-auth.com should flag phishing keywords"
+        );
+        assert!(
+            sigs[0].score >= 0.3,
+            "score should be meaningful, got {}",
+            sigs[0].score
+        );
     }
 
     #[test]
@@ -1008,14 +1209,29 @@ mod tests {
     #[test]
     fn sso_auth_com_full_pipeline() {
         let (score, signals) = evaluate_all(
-            "sso-auth.com", 443, "/IusKPirFQ9x_", "https",
-            Some("uncategorized"), None, 3.5, false, false, false, None, None,
+            "sso-auth.com",
+            443,
+            "/IusKPirFQ9x_",
+            "https",
+            Some("uncategorized"),
+            None,
+            3.5,
+            false,
+            false,
+            false,
+            None,
+            None,
         );
         assert!(
             score > 0.1,
             "sso-auth.com should score > 0.1 (got {score}), signals={signals:?}"
         );
-        let has_keyword = signals.iter().any(|s| s.name.starts_with("phishing_domain_keywords"));
-        assert!(has_keyword, "should have phishing_domain_keywords signal, signals={signals:?}");
+        let has_keyword = signals
+            .iter()
+            .any(|s| s.name.starts_with("phishing_domain_keywords"));
+        assert!(
+            has_keyword,
+            "should have phishing_domain_keywords signal, signals={signals:?}"
+        );
     }
 }

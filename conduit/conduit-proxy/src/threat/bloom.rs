@@ -45,7 +45,10 @@ pub async fn load_from_redis(pool: &Pool, _capacity: usize, _fp_rate: f64) -> Op
                 stored.k_num,
                 [(stored.sip0, stored.sip1), (stored.sip2, stored.sip3)],
             );
-            debug!(entries = stored.entry_count, "Loaded bloom filter from Redis");
+            debug!(
+                entries = stored.entry_count,
+                "Loaded bloom filter from Redis"
+            );
             Some(bloom)
         }
         Err(e) => {

@@ -87,7 +87,10 @@ pub fn initialize(pool: &Arc<Pool>, config: &ThreatConfig) -> Arc<ThreatEngine> 
             .enable_all()
             .build()
             .expect("Failed to create reputation seed runtime");
-        rt.block_on(reputation::seed_cache_from_redis(&reputation_cache, &pool_clone));
+        rt.block_on(reputation::seed_cache_from_redis(
+            &reputation_cache,
+            &pool_clone,
+        ));
     }
 
     // NRD bloom filter — sized for ~1M domains at 0.1% FP rate (~1.2MB)
@@ -170,10 +173,16 @@ pub fn evaluate_request(
 
     // Heuristics — no reputation input
     let (mut score, mut signals) = heuristics::evaluate_all(
-        host, port, path, scheme, category,
+        host,
+        port,
+        path,
+        scheme,
+        category,
         None, // no reputation — deterministic
         rt_cfg.dga_threshold,
-        bloom_hit, nrd_hit, ip_bad,
+        bloom_hit,
+        nrd_hit,
+        ip_bad,
         cert_meta,
         sec_headers,
     );
@@ -192,8 +201,14 @@ pub fn evaluate_request(
             .unwrap_or(0.0);
 
         let features = model::FeatureVector::from_request(
-            host, port, path, tld_risk_score,
-            bloom_hit, 0.5, true, score,
+            host,
+            port,
+            path,
+            tld_risk_score,
+            bloom_hit,
+            0.5,
+            true,
+            score,
         );
 
         let t0_score = score;

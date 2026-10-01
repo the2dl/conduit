@@ -32,7 +32,8 @@ impl ConnectionTracker {
             });
         }
 
-        let entry = self.connections
+        let entry = self
+            .connections
             .entry(client_ip.to_string())
             .or_insert_with(|| AtomicU32::new(0));
 
@@ -60,7 +61,8 @@ impl ConnectionTracker {
 
     /// Periodically clean up entries with zero connections.
     pub fn cleanup(&self) {
-        self.connections.retain(|_, v| v.load(Ordering::Relaxed) > 0);
+        self.connections
+            .retain(|_, v| v.load(Ordering::Relaxed) > 0);
     }
 }
 
@@ -94,7 +96,10 @@ mod tests {
 
     #[test]
     fn test_disabled() {
-        let cfg = ConnectionLimitConfig { enabled: false, max_connections_per_ip: 1 };
+        let cfg = ConnectionLimitConfig {
+            enabled: false,
+            max_connections_per_ip: 1,
+        };
         let tracker = ConnectionTracker::new(&cfg);
         let _g1 = tracker.try_acquire("1.2.3.4").unwrap();
         let _g2 = tracker.try_acquire("1.2.3.4").unwrap();

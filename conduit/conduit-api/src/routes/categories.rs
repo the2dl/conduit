@@ -139,15 +139,19 @@ async fn list_categories(
     }
 
     for e in &mut entries {
-        let is_manual: bool = conn.sismember(keys::CATEGORIES_MANUAL, &e.domain).await.unwrap_or(false);
-        e.source = if is_manual { "manual".to_string() } else { "feed".to_string() };
+        let is_manual: bool = conn
+            .sismember(keys::CATEGORIES_MANUAL, &e.domain)
+            .await
+            .unwrap_or(false);
+        e.source = if is_manual {
+            "manual".to_string()
+        } else {
+            "feed".to_string()
+        };
     }
 
     // Estimate total via DBSIZE (rough, includes non-category keys)
-    let total_estimate: Option<u64> = redis::cmd("DBSIZE")
-        .query_async(&mut *conn)
-        .await
-        .ok();
+    let total_estimate: Option<u64> = redis::cmd("DBSIZE").query_async(&mut *conn).await.ok();
 
     let next_cursor = if scan_cursor == 0 {
         None
@@ -175,7 +179,10 @@ async fn add_category(
 
     let key = keys::domain_category(&entry.domain);
     let _: () = conn.set(&key, &entry.category).await.unwrap_or(());
-    let _: () = conn.sadd(keys::CATEGORIES_MANUAL, &entry.domain).await.unwrap_or(());
+    let _: () = conn
+        .sadd(keys::CATEGORIES_MANUAL, &entry.domain)
+        .await
+        .unwrap_or(());
     super::publish_reload(&state.pool, "categories").await;
     StatusCode::CREATED
 }
@@ -195,24 +202,30 @@ async fn delete_category(
 
     let key = keys::domain_category(&q.domain);
     let _: () = conn.del(&key).await.unwrap_or(());
-    let _: () = conn.srem(keys::CATEGORIES_MANUAL, &q.domain).await.unwrap_or(());
+    let _: () = conn
+        .srem(keys::CATEGORIES_MANUAL, &q.domain)
+        .await
+        .unwrap_or(());
     super::publish_reload(&state.pool, "categories").await;
     StatusCode::NO_CONTENT
 }
 
 /// Bulk import domain categories from CSV or newline-delimited text.
 /// Format: `domain,category` per line.
-async fn import_categories(
-    State(state): State<Arc<AppState>>,
-    body: Body,
-) -> impl IntoResponse {
+async fn import_categories(State(state): State<Arc<AppState>>, body: Body) -> impl IntoResponse {
     let Ok(bytes) = axum::body::to_bytes(body, 10 * 1024 * 1024).await else {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Body too large"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Body too large"})),
+        );
     };
     let text = String::from_utf8_lossy(&bytes);
 
     let Ok(mut conn) = state.pool.get().await else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "Redis unavailable"})));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Redis unavailable"})),
+        );
     };
 
     const MAX_IMPORT_ENTRIES: u64 = 100_000;
@@ -231,7 +244,12 @@ async fn import_categories(
             let category = category.trim();
             if !domain.is_empty() && !category.is_empty() {
                 if imported >= MAX_IMPORT_ENTRIES {
-                    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("import limited to {MAX_IMPORT_ENTRIES} entries per request")})));
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(
+                            serde_json::json!({"error": format!("import limited to {MAX_IMPORT_ENTRIES} entries per request")}),
+                        ),
+                    );
                 }
                 let key = keys::domain_category(domain);
                 pipe.set(&key, category);
@@ -245,7 +263,10 @@ async fn import_categories(
         super::publish_reload(&state.pool, "categories").await;
     }
 
-    (StatusCode::OK, Json(serde_json::json!({"imported": imported})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"imported": imported})),
+    )
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

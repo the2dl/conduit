@@ -5,12 +5,12 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
 use pingora_boringssl::tokio_ssl::SslStream;
-use pingora_core::protocols::{
-    GetProxyDigest, GetSocketDigest, GetTimingDigest, Peek, Shutdown,
-    SocketDigest, Ssl, TimingDigest, UniqueID, UniqueIDType, Stream,
-};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::protocols::raw_connect::ProxyDigest;
+use pingora_core::protocols::{
+    GetProxyDigest, GetSocketDigest, GetTimingDigest, Peek, Shutdown, SocketDigest, Ssl, Stream,
+    TimingDigest, UniqueID, UniqueIDType,
+};
 use std::fmt;
 use std::io;
 use std::net::SocketAddr as StdSocketAddr;
@@ -38,8 +38,7 @@ const MITM_ID_MAX: i32 = i32::MAX - 1;
 /// other MITM connections.
 /// Keyed by client socket address string (e.g. "192.168.1.1:54321") which is
 /// unique per TCP connection.
-pub static MITM_CONTEXTS: LazyLock<DashMap<String, MitmContext>> =
-    LazyLock::new(DashMap::new);
+pub static MITM_CONTEXTS: LazyLock<DashMap<String, MitmContext>> = LazyLock::new(DashMap::new);
 
 /// Metadata captured at CONNECT time, consumed by request_filter.
 pub struct MitmContext {
@@ -83,21 +82,28 @@ impl TunnelPatterns {
         self.request_count = self.request_count.saturating_add(1);
         let path_lower = path.to_ascii_lowercase();
 
-        if path_lower.contains("login") || path_lower.contains("signin")
-            || path_lower.contains("sign-in") || path_lower.contains("logon")
+        if path_lower.contains("login")
+            || path_lower.contains("signin")
+            || path_lower.contains("sign-in")
+            || path_lower.contains("logon")
         {
             self.has_login_path = true;
         }
-        if path_lower.contains("account") || path_lower.contains("verify")
-            || path_lower.contains("auth") || path_lower.contains("password")
-            || path_lower.contains("credential") || path_lower.contains("secure")
+        if path_lower.contains("account")
+            || path_lower.contains("verify")
+            || path_lower.contains("auth")
+            || path_lower.contains("password")
+            || path_lower.contains("credential")
+            || path_lower.contains("secure")
         {
             self.has_credential_path = true;
         }
 
         let is_image = content_type.map(|ct| ct.contains("image")).unwrap_or(false)
-            || path_lower.ends_with(".png") || path_lower.ends_with(".jpg")
-            || path_lower.ends_with(".svg") || path_lower.ends_with(".ico");
+            || path_lower.ends_with(".png")
+            || path_lower.ends_with(".jpg")
+            || path_lower.ends_with(".svg")
+            || path_lower.ends_with(".ico");
         if is_image {
             let filename = path_lower.rsplit('/').next().unwrap_or("");
             if filename.contains("logo") {
@@ -128,7 +134,11 @@ impl TunnelPatterns {
             signals += 1;
         }
 
-        if signals >= 2 { Some(score.min(1.0)) } else { None }
+        if signals >= 2 {
+            Some(score.min(1.0))
+        } else {
+            None
+        }
     }
 }
 

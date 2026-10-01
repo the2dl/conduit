@@ -50,8 +50,7 @@ pub fn generate_cert(domain: &str, ca: &CertAuthority) -> anyhow::Result<Generat
     // Extensions
     let basic_constraints = BasicConstraints::new().build()?;
     let extended_key_usage = ExtendedKeyUsage::new().server_auth().build()?;
-    let skid = SubjectKeyIdentifier::new()
-        .build(&builder.x509v3_context(Some(&ca.cert), None))?;
+    let skid = SubjectKeyIdentifier::new().build(&builder.x509v3_context(Some(&ca.cert), None))?;
     let akid = AuthorityKeyIdentifier::new()
         .keyid(false)
         .issuer(false)
