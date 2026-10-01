@@ -129,6 +129,20 @@ listen_addr = "0.0.0.0:9091"
 enabled = true
 max_scan_size = 1048576               # 1MB scan limit
 action = "log"                        # Log/audit mode rather than block
+# Domains or wildcard patterns exempt from all DLP inspections
+# (e.g. trusted container and package registries)
+allowed_domains = [
+    "*.pkg.dev",
+    "*.docker.pkg.dev",
+    "us-central1-docker.pkg.dev",
+    "*.gcr.io",
+    "docker.io",
+    "*.docker.io",
+    "ghcr.io",
+    "*.ecr.*.amazonaws.com",
+    "quay.io",
+    "*.quay.io",
+]
 
 # --- In-line Package Security & Supply Chain Scanner (YARA-X) ---
 [package_scanner]

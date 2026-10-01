@@ -355,6 +355,9 @@ pub struct DlpRule {
     pub builtin: bool,
     #[serde(default)]
     pub hits: u64,
+    /// Domains exempt from this rule (e.g. ["*.pkg.dev", "us-central1-docker.pkg.dev"]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_domains: Vec<String>,
 }
 fn default_true() -> bool {
     true

@@ -124,6 +124,17 @@
 		</div>
 	</div>
 
+	<label class="flex flex-col gap-1.5">
+		<span class="text-xs text-[#A3A3AB]">Exempt / Allowed Domains</span>
+		<input
+			type="text"
+			bind:value={drawer.dlpDraft.allowed_domains}
+			placeholder="*.pkg.dev us-central1-docker.pkg.dev"
+			class="h-8 px-2.5 rounded-md border border-[#1F1F24] bg-[#111113] text-[#E6E6E8] font-mono text-[12.5px] outline-none focus:border-[#ED2377]"
+		/>
+		<span class="text-[11.5px] text-[#55555C]">Space or comma separated. Wildcards match subdomains. Bypasses this rule.</span>
+	</label>
+
 	<div class="flex flex-col gap-1.5">
 		<span class="text-xs text-[#A3A3AB]">Test against sample</span>
 		<textarea

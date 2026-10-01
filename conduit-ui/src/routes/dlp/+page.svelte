@@ -41,7 +41,8 @@
 			name: rule.name,
 			pattern: rule.regex,
 			action: rule.action,
-			builtin: rule.builtin
+			builtin: rule.builtin,
+			allowed_domains: rule.allowed_domains
 		});
 	}
 
@@ -94,7 +95,14 @@
 						class="grid grid-cols-[minmax(140px,1fr)_minmax(240px,2fr)_64px_70px_50px_36px] gap-3.5 items-center h-11 px-4 border-b border-[#151518] last:border-none cursor-pointer transition-colors hover:bg-[#131316] text-left text-[13px]
 							{r.enabled ? 'opacity-100' : 'opacity-50'}"
 					>
-						<span class="text-[13px] font-medium text-[#E6E6E8] truncate">{r.name}</span>
+						<span class="text-[13px] font-medium text-[#E6E6E8] truncate flex items-center gap-2">
+							<span class="truncate">{r.name}</span>
+							{#if r.allowed_domains && r.allowed_domains.length > 0}
+								<span class="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#1A1A20] text-[#8E8E98] border border-[#26262E]" title={r.allowed_domains.join(', ')}>
+									{r.allowed_domains.length} exempt
+								</span>
+							{/if}
+						</span>
 						<span class="font-mono text-xs text-[#A3A3AB] truncate">{r.regex}</span>
 						<span
 							class="flex items-center gap-1.5 font-mono text-[10.5px] font-semibold tracking-wider"

@@ -595,9 +595,24 @@ pub struct DlpConfig {
     /// Action on match: "log", "block", or "redact".
     #[serde(default = "default_dlp_action")]
     pub action: String,
+    /// Domains exempt from all DLP inspections (e.g. ["*.pkg.dev"]).
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
     /// Custom regex patterns.
     #[serde(default)]
     pub custom_patterns: Vec<DlpPattern>,
+}
+
+impl DlpConfig {
+    /// Check if a domain is exempt from DLP inspection.
+    pub fn is_domain_allowed(&self, host: &str) -> bool {
+        for pattern in &self.allowed_domains {
+            if matches_domain_pattern(pattern, host) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// A custom DLP regex pattern.
@@ -608,6 +623,9 @@ pub struct DlpPattern {
     pub regex: String,
     #[serde(default = "default_dlp_action")]
     pub action: String,
+    /// Domains exempt from this pattern.
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
 }
 
 fn default_dlp_max_scan() -> usize {
@@ -1132,5 +1150,21 @@ mod tests {
         // Non-muted domain
         assert!(!notif.is_domain_muted("api.weirdapp.com"));
         assert!(!notif.is_domain_muted("notdatadoghq.com"));
+    }
+
+    #[test]
+    fn test_dlp_allowed_domains() {
+        let dlp = DlpConfig {
+            enabled: true,
+            max_scan_size: 1024,
+            action: "block".into(),
+            allowed_domains: vec!["*.pkg.dev".into(), "registry.npmjs.org".into()],
+            custom_patterns: vec![],
+        };
+
+        assert!(dlp.is_domain_allowed("us-central1-docker.pkg.dev"));
+        assert!(dlp.is_domain_allowed("docker.pkg.dev"));
+        assert!(dlp.is_domain_allowed("registry.npmjs.org"));
+        assert!(!dlp.is_domain_allowed("evil-exfil.com"));
     }
 }

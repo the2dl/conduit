@@ -121,10 +121,16 @@ fail_closed = true
 # enabled = true
 # max_scan_size = 1048576          # 1MB scan limit
 # action = "log"                   # "log", "block", or "redact"
+# allowed_domains = [              # Domains exempt from all DLP inspections
+#     "*.pkg.dev",
+#     "*.docker.pkg.dev",
+#     "us-central1-docker.pkg.dev",
+# ]
 # [[dlp.custom_patterns]]
 # name = "internal_id"
 # regex = "INTERNAL-\\d{8}"
 # action = "block"
+# allowed_domains = ["*.internal.corp"]
 
 # --- HTTP/2 Downstream ---
 # [downstream]

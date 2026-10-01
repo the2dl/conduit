@@ -106,7 +106,9 @@ fn uuid_v4() -> String {
         u16::from_be_bytes([bytes[4], bytes[5]]),
         u16::from_be_bytes([bytes[6], bytes[7]]) & 0x0FFF,
         (u16::from_be_bytes([bytes[8], bytes[9]]) & 0x3FFF) | 0x8000,
-        u64::from_be_bytes([0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]])
+        u64::from_be_bytes([
+            0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ])
     )
 }
 
@@ -128,7 +130,10 @@ fn generate_self_signed_cert() -> (Vec<u8>, Vec<u8>) {
     let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
     let key_pair = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
-    (cert.pem().into_bytes(), key_pair.serialize_pem().into_bytes())
+    (
+        cert.pem().into_bytes(),
+        key_pair.serialize_pem().into_bytes(),
+    )
 }
 
 #[tokio::main]

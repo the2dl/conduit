@@ -147,6 +147,7 @@ export interface DlpRule {
 	enabled: boolean;
 	builtin: boolean;
 	hits?: number;
+	allowed_domains?: string[];
 }
 
 export const api = {

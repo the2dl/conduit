@@ -19,6 +19,7 @@ export interface DlpDraft {
 	action: 'log' | 'block' | 'redact';
 	sample: string;
 	builtin?: boolean;
+	allowed_domains: string;
 }
 
 const DEFAULT_SAMPLE = 'invoice PROJ-204918 paid with 4111 1111 1111 1111\nkey=AKIAIOSFODNN7EXAMPLE ssn 078-05-1120';
@@ -37,7 +38,8 @@ let dlpDraft = $state<DlpDraft>({
 	name: '',
 	pattern: '',
 	action: 'log',
-	sample: DEFAULT_SAMPLE
+	sample: DEFAULT_SAMPLE,
+	allowed_domains: ''
 });
 
 let policyCount = $state(0);
@@ -106,14 +108,18 @@ export const drawer = {
 		activeSheet = 'policy';
 	},
 
-	openDlp(preset?: Partial<DlpDraft>) {
+	openDlp(preset?: Partial<DlpDraft> & { allowed_domains?: string | string[] }) {
+		const allowed = Array.isArray(preset?.allowed_domains)
+			? preset.allowed_domains.join(' ')
+			: (preset?.allowed_domains ?? '');
 		dlpDraft = {
 			name: preset?.name ?? '',
 			pattern: preset?.pattern ?? 'PROJ-\\d{6}',
 			action: preset?.action ?? 'log',
 			sample: preset?.sample ?? DEFAULT_SAMPLE,
 			id: preset?.id,
-			builtin: preset?.builtin ?? false
+			builtin: preset?.builtin ?? false,
+			allowed_domains: allowed
 		};
 		activeSheet = 'dlp';
 	},
@@ -180,6 +186,7 @@ export const drawer = {
 			return false;
 		}
 
+		const allowedDomains = dlpDraft.allowed_domains.split(/[\s,]+/).filter(Boolean);
 		try {
 			if (dlpDraft.id) {
 				await api.dlp.update({
@@ -188,14 +195,16 @@ export const drawer = {
 					regex: dlpDraft.pattern.trim(),
 					action: dlpDraft.action,
 					enabled: true,
-					builtin: dlpDraft.builtin ?? false
+					builtin: dlpDraft.builtin ?? false,
+					allowed_domains: allowedDomains
 				});
 			} else {
 				await api.dlp.create({
 					name: dlpDraft.name.trim(),
 					regex: dlpDraft.pattern.trim(),
 					action: dlpDraft.action,
-					enabled: true
+					enabled: true,
+					allowed_domains: allowedDomains
 				});
 			}
 			activeSheet = null;

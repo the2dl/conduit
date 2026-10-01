@@ -820,14 +820,24 @@ impl ProxyHttp for ClearGateProxy {
                 }
             }
 
-            // Buffer for DLP scanning (lazy init on first body chunk)
+            // Buffer for DLP scanning (lazy init on first body chunk, skipped if host is exempt or allowlisted)
             if let Some(ref dlp) = self.dlp_engine {
-                let buf = ctx
-                    .dlp_body_buffer
-                    .get_or_insert_with(|| Vec::with_capacity(dlp.max_scan_size.min(8192)));
-                let remaining = dlp.max_scan_size.saturating_sub(buf.len());
-                if remaining > 0 {
-                    buf.extend_from_slice(&b[..b.len().min(remaining)]);
+                let is_dlp_exempt = self
+                    .config
+                    .allowlist
+                    .as_ref()
+                    .map(|a| a.is_allowed(&ctx.host, ctx.port, None, Some(&ctx.client_ip)))
+                    .unwrap_or(false)
+                    || dlp.is_domain_allowed(&ctx.host);
+
+                if !is_dlp_exempt {
+                    let buf = ctx
+                        .dlp_body_buffer
+                        .get_or_insert_with(|| Vec::with_capacity(dlp.max_scan_size.min(8192)));
+                    let remaining = dlp.max_scan_size.saturating_sub(buf.len());
+                    if remaining > 0 {
+                        buf.extend_from_slice(&b[..b.len().min(remaining)]);
+                    }
                 }
             }
         }
@@ -837,7 +847,7 @@ impl ProxyHttp for ClearGateProxy {
             if let Some(buf) = ctx.dlp_body_buffer.take() {
                 if !buf.is_empty() {
                     if let Some(ref dlp) = self.dlp_engine {
-                        let matches = dlp.scan(&buf);
+                        let matches = dlp.scan(&buf, Some(&ctx.host));
                         if !matches.is_empty() {
                             let pattern_names: Vec<String> =
                                 matches.iter().map(|m| m.pattern_name.clone()).collect();
