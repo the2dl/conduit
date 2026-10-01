@@ -259,7 +259,7 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
         ),
         (
             "env_secret_export",
-            r#"(?i)\b(?:export\s+)?(?:DB_PASSWORD|PASSWORD|PASSWD|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)\s*=\s*["']?[^"'\s]{8,}["']?"#,
+            r#"(?i)\b(?:export\s+(?:[A-Z0-9_]*(?:PASSWORD|PASSWD)[A-Z0-9_]*|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)|(?:[A-Z0-9]+_(?:PASSWORD|PASSWD)|SECRET_KEY|JWT_SECRET|AUTH_TOKEN))\s*=\s*["']?[^"'\s&]{8,}["']?"#,
             &[
                 "*.pkg.dev",
                 "*.docker.pkg.dev",
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn test_env_secret_export_docker_pkg_dev_allowed() {
         let engine = DlpEngine::new(&test_config("block"));
-        let body = b"grant_type=refresh_token&service=us-central1-docker.pkg.dev&password=ya29.secrettoken12345";
+        let body = b"export DB_PASSWORD=\"SuperSecretPassword123\"";
 
         // Without host or on an untrusted host, the pattern triggers
         let matches_untrusted = engine.scan(body, Some("evil-site.com"));
@@ -510,6 +510,25 @@ mod tests {
         // Also exempt for other docker registries like ghcr.io
         let matches_ghcr = engine.scan(body, Some("ghcr.io"));
         assert!(matches_ghcr.is_empty());
+    }
+
+    #[test]
+    fn test_login_form_not_flagged_as_secret_export() {
+        let engine = DlpEngine::new(&test_config("block"));
+        // Standard URL-encoded web form submission (e.g. Civo login)
+        let form_body = b"email=dan%40example.com&password=SuperSecretPassword123&button=login";
+        let matches = engine.scan(form_body, Some("dashboard.civo.com"));
+        assert!(matches.is_empty());
+
+        // JSON login payload
+        let json_body = br#"{"username":"dan@example.com","password":"SuperSecretPassword123"}"#;
+        let json_matches = engine.scan(json_body, Some("dashboard.civo.com"));
+        assert!(json_matches.is_empty());
+
+        // OAuth token request with password grant
+        let oauth_body = b"grant_type=password&username=dan&password=ya29.secrettoken12345";
+        let oauth_matches = engine.scan(oauth_body, Some("oauth2.googleapis.com"));
+        assert!(oauth_matches.is_empty());
     }
 
     #[test]

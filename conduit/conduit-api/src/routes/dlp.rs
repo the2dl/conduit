@@ -384,7 +384,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
         DlpRule {
             id: "builtin-env-secret-export".into(),
             name: "Password / Secret Env Export".into(),
-            regex: r#"(?i)\b(?:export\s+)?(?:DB_PASSWORD|PASSWORD|PASSWD|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)\s*=\s*["']?[^"'\s]{8,}["']?"#.into(),
+            regex: r#"(?i)\b(?:export\s+(?:[A-Z0-9_]*(?:PASSWORD|PASSWD)[A-Z0-9_]*|SECRET_KEY|JWT_SECRET|AUTH_TOKEN)|(?:[A-Z0-9]+_(?:PASSWORD|PASSWD)|SECRET_KEY|JWT_SECRET|AUTH_TOKEN))\s*=\s*["']?[^"'\s&]{8,}["']?"#.into(),
             action: DlpRuleAction::Block,
             enabled: true,
             builtin: true,
@@ -461,19 +461,26 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
                 any_changed = true;
             }
             Some(curr) => {
-                // If the existing built-in rule lacks allowed_domains from the definition, backfill them
+                // If the existing built-in rule lacks allowed_domains or has an outdated regex, update it
                 if let Ok(mut existing_rule) = serde_json::from_str::<DlpRule>(&curr) {
-                    if existing_rule.builtin
-                        && existing_rule.allowed_domains.is_empty()
-                        && !rule.allowed_domains.is_empty()
-                    {
-                        existing_rule.allowed_domains = rule.allowed_domains.clone();
-                        let json = serde_json::to_string(&existing_rule).unwrap();
-                        let _: () = conn
-                            .hset(keys::DLP_RULES, &rule.id, &json)
-                            .await
-                            .unwrap_or(());
-                        any_changed = true;
+                    if existing_rule.builtin {
+                        let mut rule_changed = false;
+                        if existing_rule.regex != rule.regex {
+                            existing_rule.regex = rule.regex.clone();
+                            rule_changed = true;
+                        }
+                        if existing_rule.allowed_domains.is_empty() && !rule.allowed_domains.is_empty() {
+                            existing_rule.allowed_domains = rule.allowed_domains.clone();
+                            rule_changed = true;
+                        }
+                        if rule_changed {
+                            let json = serde_json::to_string(&existing_rule).unwrap();
+                            let _: () = conn
+                                .hset(keys::DLP_RULES, &rule.id, &json)
+                                .await
+                                .unwrap_or(());
+                            any_changed = true;
+                        }
                     }
                 }
             }

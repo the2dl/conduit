@@ -29,6 +29,8 @@ const TRUSTED_CATEGORIES: &[&str] = &[
     "healthcare",
     "streaming_entertainment",
     "telecom_isp",
+    "technology",
+    "business_corporate",
 ];
 
 /// Returns true if the category represents a trusted first-party service
@@ -135,15 +137,12 @@ pub async fn update_from_log(
         .threat_tier
         .unwrap_or(conduit_common::types::ThreatTier::Tier0);
 
-    // Tier 2+ content analysis — real findings about domain content
-    let dominated_by_content = tier >= conduit_common::types::ThreatTier::Tier2;
-
-    let threat_score_val = entry.threat_score.unwrap_or(0.0);
-
-    // Learn from: blocks at Tier 1+ OR Tier 2+ with score >= 0.5
+    // Only update reputation if the request was actually blocked with evidence (Tier 1+).
     // Tier 0 blocks are excluded — heuristic false positives shouldn't persist via reputation.
-    let blocked_with_evidence = was_blocked && tier >= conduit_common::types::ThreatTier::Tier1;
-    if !blocked_with_evidence && (!dominated_by_content || threat_score_val < 0.5) {
+    // Unblocked requests (even with Tier 2 content signals) must never poison reputation,
+    // otherwise allowed pages (e.g. login pages, pricing calculators) could be auto-blocked
+    // on subsequent visits via reputation checks.
+    if !was_blocked || tier < conduit_common::types::ThreatTier::Tier1 {
         return;
     }
 
