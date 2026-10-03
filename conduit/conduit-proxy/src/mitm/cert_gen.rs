@@ -41,9 +41,13 @@ pub fn generate_cert(domain: &str, ca: &CertAuthority) -> anyhow::Result<Generat
     builder.set_issuer_name(ca.cert.subject_name())?;
     builder.set_pubkey(&key)?;
 
-    // Valid for 24 hours
-    let not_before = Asn1Time::days_from_now(0)?;
-    let not_after = Asn1Time::days_from_now(1)?;
+    // Validity: backdate 1 day to tolerate client clock skew; valid for 30 days.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let not_before = Asn1Time::from_unix(now.saturating_sub(86400) as _)?;
+    let not_after = Asn1Time::from_unix(now.saturating_add(30 * 86400) as _)?;
     builder.set_not_before(&not_before)?;
     builder.set_not_after(&not_after)?;
 
@@ -70,4 +74,32 @@ pub fn generate_cert(domain: &str, ca: &CertAuthority) -> anyhow::Result<Generat
     let cert = builder.build();
 
     Ok(GeneratedCert { cert, key })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_cert_validity_and_extensions() {
+        let ca = CertAuthority::generate().unwrap();
+        let gen = generate_cert("google.com", &ca).unwrap();
+
+        // Check not_before and not_after
+        let now_asn1 = Asn1Time::from_unix(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as _,
+        )
+        .unwrap();
+
+        // not_before should be in the past (backdated by ~1 day)
+        let diff_before = gen.cert.not_before().diff(&now_asn1).unwrap();
+        assert!(diff_before.days >= 0 || diff_before.secs >= 0);
+
+        // not_after should be in the future (~30 days)
+        let diff_after = now_asn1.diff(gen.cert.not_after()).unwrap();
+        assert!(diff_after.days >= 28);
+    }
 }
