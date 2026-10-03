@@ -1,0 +1,7 @@
+[Unit]
+Description=Conduit Security Gateway
+Wants=conduit-dragonfly.service conduit-api.service conduit-proxy.service
+After=conduit-dragonfly.service conduit-api.service conduit-proxy.service
+
+[Install]
+WantedBy=default.target

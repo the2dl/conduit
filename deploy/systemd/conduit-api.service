@@ -1,0 +1,20 @@
+[Unit]
+Description=Conduit Security Gateway Management API & UI
+After=network.target conduit-dragonfly.service
+Wants=conduit-dragonfly.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/conduit
+UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+Environment=CONDUIT_CONFIG=%h/conduit/conduit.toml
+Environment=RUST_LOG=info
+ExecStartPre=/usr/bin/timeout 15 /usr/bin/bash -c 'until /usr/bin/nc -z 127.0.0.1 6380; do sleep 0.2; done'
+ExecStart=%h/conduit/target/release/conduit-api
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:%h/conduit/logs/api.log
+StandardError=append:%h/conduit/logs/api.log
+
+[Install]
+WantedBy=default.target

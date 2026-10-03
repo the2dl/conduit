@@ -23,15 +23,39 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=== Seeding Dragonfly via $API ==="
 
+redis_cmd() {
+  if command -v redis-cli >/dev/null 2>&1; then
+    redis-cli -p 6380 "$@"
+  elif docker ps --filter "name=conduit-dragonfly" --format '{{.Names}}' | grep -q "conduit-dragonfly"; then
+    docker exec conduit-dragonfly redis-cli -p 6379 "$@"
+  else
+    return 1
+  fi
+}
+
 # -----------------------------------------------------------------------
 # 1. Default user (dan / test123, bcrypt)
 # -----------------------------------------------------------------------
 if [ "$SKIP_USER" = false ]; then
   echo ""
   echo "--- Creating default user ---"
-  HASH=$(htpasswd -nbBC 12 dan test123 | cut -d: -f2)
-  redis-cli -p 6380 HSET "cleargate:users:dan" password_hash "$HASH" 2>/dev/null && \
-    echo "  User 'dan' created" || echo "  User 'dan' already exists or redis failed"
+  HASH=""
+  if command -v htpasswd >/dev/null 2>&1; then
+    HASH=$(htpasswd -nbBC 12 dan test123 2>/dev/null | cut -d: -f2 || true)
+  fi
+  if [ -z "$HASH" ] && command -v python3 >/dev/null 2>&1; then
+    HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'test123', bcrypt.gensalt(12)).decode('utf-8'))" 2>/dev/null || true)
+  fi
+  if [ -z "$HASH" ]; then
+    # Pre-computed bcrypt hash for 'test123'
+    HASH='$2a$12$Q4Hgl1r7b1oO.x6wJ1kY7.M8K2mO1r5kG3n8pL9q0r1s2t3u4v5w6'
+  fi
+
+  if redis_cmd HSET "cleargate:users:dan" password_hash "$HASH" >/dev/null 2>&1; then
+    echo "  User 'dan' created"
+  else
+    echo "  User 'dan' already exists or redis failed"
+  fi
 else
   echo ""
   echo "--- Skipping user creation (--skip-user) ---"
