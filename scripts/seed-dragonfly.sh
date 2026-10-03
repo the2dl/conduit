@@ -69,7 +69,7 @@ register_feed "ThreatFox" \
 
 # Hagezi Threat Intelligence Feeds — large domain blocklist
 register_feed "Hagezi TIF" \
-  "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/tif.txt" \
+  "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.medium-onlydomains.txt" \
   "domain_blocklist"
 
 # NRD 30-day — newly registered domains (whoisds.com format)
