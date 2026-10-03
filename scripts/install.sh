@@ -491,6 +491,20 @@ if [ "$TRUST_CA" = true ]; then
       $SUDO update-ca-trust
       echo "  Installed into Fedora/RHEL trust store via update-ca-trust."
     fi
+
+    # Also update user NSS database for Chrome / Chromium if present
+    USER_NSSDB="$REAL_HOME/.pki/nssdb"
+    if command -v certutil >/dev/null 2>&1 && [ -d "$USER_NSSDB" ]; then
+      if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        sudo -u "$REAL_USER" certutil -d "sql:$USER_NSSDB" -D -n "Conduit Root CA" >/dev/null 2>&1 || true
+        sudo -u "$REAL_USER" certutil -d "sql:$USER_NSSDB" -A -t "C,," -n "Conduit Root CA" -i "$CA_SOURCE" >/dev/null 2>&1 || true
+      else
+        certutil -d "sql:$USER_NSSDB" -D -n "Conduit Root CA" >/dev/null 2>&1 || true
+        certutil -d "sql:$USER_NSSDB" -A -t "C,," -n "Conduit Root CA" -i "$CA_SOURCE" >/dev/null 2>&1 || true
+      fi
+      echo "  Installed into user Chrome/NSS trust database ($USER_NSSDB)."
+    fi
+
     rm -f /tmp/conduit-ca.pem
   else
     echo "  Warning: Could not obtain CA certificate to install."
