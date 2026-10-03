@@ -163,8 +163,15 @@ pub fn evaluate_request(
         bloom::contains(&nrd, host)
     };
 
-    // IP reputation
-    let ip_bad = upstream_ip.map_or(false, |ip| {
+    // IP reputation: check upstream_ip if resolved, or host if host is a bare IP
+    let ip_to_check = upstream_ip.or_else(|| {
+        if host.parse::<std::net::IpAddr>().is_ok() {
+            Some(host)
+        } else {
+            None
+        }
+    });
+    let ip_bad = ip_to_check.map_or(false, |ip| {
         let cidrs = engine.bad_cidrs.read();
         ip_reputation::is_bad_ip(&cidrs, ip)
     });
