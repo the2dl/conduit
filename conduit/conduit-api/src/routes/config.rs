@@ -22,6 +22,9 @@ const ALLOWED_CONFIG_KEYS: &[&str] = &[
     "dga_threshold",
     "threat_prevention",
     "threat_block_threshold",
+    "auto_categorize_enabled",
+    "auto_categorize_agent",
+    "auto_categorize_ut1",
 ];
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -48,6 +51,15 @@ async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     config
         .entry("threat_block_threshold".into())
         .or_insert_with(|| "0.7".into());
+    config
+        .entry("auto_categorize_enabled".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("auto_categorize_agent".into())
+        .or_insert_with(|| "agy".into());
+    config
+        .entry("auto_categorize_ut1".into())
+        .or_insert_with(|| "true".into());
     (StatusCode::OK, Json(serde_json::json!(config)))
 }
 

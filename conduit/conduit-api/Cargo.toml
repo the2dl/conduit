@@ -11,7 +11,7 @@ path = "src/main.rs"
 conduit-common = { path = "../conduit-common" }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
 
 # Serialization
 serde = { workspace = true }
@@ -49,3 +49,5 @@ nonzero_lit = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }

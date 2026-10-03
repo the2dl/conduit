@@ -72,6 +72,28 @@ export interface PaginatedCategories {
 	total_estimate: number | null;
 }
 
+export interface PendingCategoriesResponse {
+	count: number;
+	domains: string[];
+}
+
+export interface CategorizationAgentsResponse {
+	available: string[];
+	default: string;
+}
+
+export interface AutoCategorizeResult {
+	success: boolean;
+	categorized_count: number;
+	categorized: CategoryEntry[];
+	failed: string[];
+	ut1_imported: boolean;
+	ut1_domains: number;
+	agent_used: string;
+	duration_ms: number;
+	error?: string;
+}
+
 export interface PolicyRule {
 	id: string;
 	priority: number;
@@ -175,7 +197,21 @@ export const api = {
 		remove: (domain: string) =>
 			request<void>(`/categories?domain=${encodeURIComponent(domain)}`, { method: 'DELETE' }),
 		import: (csv: string) =>
-			fetch(`${API_BASE}/categories/import`, { method: 'POST', body: csv })
+			fetch(`${API_BASE}/categories/import`, { method: 'POST', body: csv }),
+		pending: (limit = 100) =>
+			request<PendingCategoriesResponse>(`/categories/pending?limit=${limit}`),
+		agents: () =>
+			request<CategorizationAgentsResponse>('/categories/agents'),
+		autoCategorize: (options?: {
+			agent?: string;
+			sync_ut1?: boolean;
+			limit?: number;
+			domains?: string[];
+		}) =>
+			request<AutoCategorizeResult>('/categories/auto-categorize', {
+				method: 'POST',
+				body: JSON.stringify(options || {})
+			})
 	},
 	policies: {
 		list: () => request<PolicyRule[]>('/policies'),

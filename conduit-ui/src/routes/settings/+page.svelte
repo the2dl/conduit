@@ -11,7 +11,10 @@
 		dga_prevention: 'false',
 		dga_threshold: '3.5',
 		threat_prevention: 'false',
-		threat_block_threshold: '0.7'
+		threat_block_threshold: '0.7',
+		auto_categorize_enabled: 'true',
+		auto_categorize_agent: 'agy',
+		auto_categorize_ut1: 'true'
 	});
 	let draftConfig = $state<Record<string, string>>({
 		tls_intercept: 'true',
@@ -19,9 +22,17 @@
 		dga_prevention: 'false',
 		dga_threshold: '3.5',
 		threat_prevention: 'false',
-		threat_block_threshold: '0.7'
+		threat_block_threshold: '0.7',
+		auto_categorize_enabled: 'true',
+		auto_categorize_agent: 'agy',
+		auto_categorize_ut1: 'true'
 	});
 	let loading = $state(true);
+
+	// Auto-categorization state
+	let pendingCount = $state(0);
+	let availableAgents = $state<string[]>(['agy', 'codex', 'claude']);
+	let runningCategorization = $state(false);
 
 	// CA cert state
 	let caSubject = $state('CN=conduit root ca, O=conduit proxy, C=US');
@@ -41,7 +52,10 @@
 			draftConfig.dga_prevention !== savedConfig.dga_prevention ||
 			draftConfig.dga_threshold !== savedConfig.dga_threshold ||
 			draftConfig.threat_prevention !== savedConfig.threat_prevention ||
-			draftConfig.threat_block_threshold !== savedConfig.threat_block_threshold
+			draftConfig.threat_block_threshold !== savedConfig.threat_block_threshold ||
+			draftConfig.auto_categorize_enabled !== savedConfig.auto_categorize_enabled ||
+			draftConfig.auto_categorize_agent !== savedConfig.auto_categorize_agent ||
+			draftConfig.auto_categorize_ut1 !== savedConfig.auto_categorize_ut1
 	);
 
 	let tlsOn = $derived(
@@ -56,6 +70,20 @@
 	let threatOn = $derived(
 		draftConfig.threat_prevention === 'true' || (draftConfig.threat_prevention as any) === true
 	);
+	let autoCatOn = $derived(
+		draftConfig.auto_categorize_enabled === 'true' || (draftConfig.auto_categorize_enabled as any) === true
+	);
+	let autoUt1On = $derived(
+		draftConfig.auto_categorize_ut1 === 'true' || (draftConfig.auto_categorize_ut1 as any) === true
+	);
+
+	function toggleAutoCat() {
+		draftConfig.auto_categorize_enabled = autoCatOn ? 'false' : 'true';
+	}
+
+	function toggleAutoUt1() {
+		draftConfig.auto_categorize_ut1 = autoUt1On ? 'false' : 'true';
+	}
 
 	function toggleTls() {
 		draftConfig.tls_intercept = tlsOn ? 'false' : 'true';
@@ -138,6 +166,41 @@
 		showToast('Downloaded conduit-ca.der');
 	}
 
+	async function loadCategorizationInfo() {
+		try {
+			const [pending, ags] = await Promise.all([
+				api.categories.pending(1).catch(() => ({ count: 0, domains: [] })),
+				api.categories.agents().catch(() => ({ available: ['agy'], default: 'agy' }))
+			]);
+			pendingCount = pending.count;
+			if (ags.available && ags.available.length > 0) {
+				availableAgents = ags.available;
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
+	async function triggerCategorizationNow() {
+		runningCategorization = true;
+		try {
+			const res = await api.categories.autoCategorize({
+				agent: draftConfig.auto_categorize_agent,
+				sync_ut1: autoUt1On
+			});
+			if (res.success) {
+				showToast(`Categorized ${res.categorized_count} domains using ${res.agent_used}`);
+			} else {
+				showToast(`Categorization completed with warnings: ${res.error || 'Check logs'}`);
+			}
+			await loadCategorizationInfo();
+		} catch (err: any) {
+			showToast(err.message || 'Auto-categorization failed');
+		} finally {
+			runningCategorization = false;
+		}
+	}
+
 	onMount(async () => {
 		try {
 			const [cfg, h] = await Promise.all([
@@ -154,6 +217,7 @@
 			loading = false;
 		}
 		loadCA();
+		loadCategorizationInfo();
 	});
 </script>
 
@@ -308,6 +372,108 @@
 							class="w-20 h-7 px-2 border border-[#2A2A30] rounded bg-[#0A0A0B] text-[#E6E6E8] font-mono text-xs text-right focus:outline-none focus:border-[#ED2377]"
 						/>
 					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Section: Automated Domain Categorization -->
+		<div
+			class="grid grid-cols-[220px_minmax(0,1fr)] gap-8 py-6 border-b border-[#1F1F24]"
+		>
+			<div class="flex flex-col gap-1">
+				<span class="font-semibold text-[#E6E6E8]">Auto-Categorization</span>
+				<span class="text-[#6B6B73] text-[12.5px] leading-[19px]">
+					Automate daily domain classification using local AI agents and feed syncs.
+				</span>
+			</div>
+			<div class="flex flex-col border border-[#1F1F24] rounded-lg bg-[#111113]">
+				<!-- Enable Daily Categorization -->
+				<div class="flex items-center gap-4 p-3.5 px-4 border-b border-[#1F1F24]">
+					<div class="flex-1 flex flex-col gap-0.5">
+						<span class="font-medium text-[#E6E6E8] text-[13px]">Daily auto-categorization</span>
+						<span class="text-[#6B6B73] text-[12.5px]">
+							Automatically classify uncategorized domains observed in proxy traffic.
+						</span>
+						<span class="font-mono text-[11px] text-[#55555C]">auto_categorize_enabled</span>
+					</div>
+					<button
+						type="button"
+						aria-label="Toggle auto-categorization"
+						onclick={toggleAutoCat}
+						class="w-[34px] h-5 flex-none rounded-[10px] p-0.5 flex cursor-pointer transition-colors {autoCatOn
+							? 'bg-[#ED2377] justify-end'
+							: 'bg-[#2A2A30] justify-start'}"
+					>
+						<span class="w-4 h-4 rounded-full bg-white block shadow-sm"></span>
+					</button>
+				</div>
+
+				<!-- Local Agent Selection -->
+				<div class="flex items-center gap-4 p-3.5 px-4 border-b border-[#1F1F24]">
+					<div class="flex-1 flex flex-col gap-0.5">
+						<span class="font-medium text-[#E6E6E8] text-[13px]">Local AI agent</span>
+						<span class="text-[#6B6B73] text-[12.5px]">
+							On-device agent used for headless domain categorization sweeps.
+						</span>
+						<span class="font-mono text-[11px] text-[#55555C]">auto_categorize_agent</span>
+					</div>
+					<div class="flex items-center gap-2">
+						<select
+							bind:value={draftConfig.auto_categorize_agent}
+							class="h-7 px-2.5 border border-[#2A2A30] rounded bg-[#0A0A0B] text-[#E6E6E8] font-mono text-xs focus:outline-none focus:border-[#ED2377]"
+						>
+							{#each ['agy', 'codex', 'claude'] as agent}
+								{@const detected = availableAgents.includes(agent)}
+								<option value={agent}>
+									{agent} {detected ? '(detected)' : '(not installed)'}
+								</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+
+				<!-- UT1 Feed Daily Sync -->
+				<div class="flex items-center gap-4 p-3.5 px-4 border-b border-[#1F1F24]">
+					<div class="flex-1 flex flex-col gap-0.5">
+						<span class="font-medium text-[#E6E6E8] text-[13px]">Sync UT1 categories daily</span>
+						<span class="text-[#6B6B73] text-[12.5px]">
+							Daily automated download and ingestion of Université Toulouse 1 Capitole taxonomy.
+						</span>
+						<span class="font-mono text-[11px] text-[#55555C]">auto_categorize_ut1</span>
+					</div>
+					<button
+						type="button"
+						aria-label="Toggle UT1 daily sync"
+						onclick={toggleAutoUt1}
+						class="w-[34px] h-5 flex-none rounded-[10px] p-0.5 flex cursor-pointer transition-colors {autoUt1On
+							? 'bg-[#ED2377] justify-end'
+							: 'bg-[#2A2A30] justify-start'}"
+					>
+						<span class="w-4 h-4 rounded-full bg-white block shadow-sm"></span>
+					</button>
+				</div>
+
+				<!-- Queue Status & Run Now -->
+				<div class="flex items-center justify-between gap-4 p-3.5 px-4 bg-[#141417]">
+					<div class="flex items-center gap-2 text-xs">
+						<span class="text-[#6B6B73]">Pending uncategorized domains:</span>
+						<span class="font-mono px-2 py-0.5 rounded bg-[#1F1F24] text-[#E6E6E8] font-medium">
+							{pendingCount.toLocaleString()}
+						</span>
+					</div>
+					<button
+						type="button"
+						disabled={runningCategorization}
+						onclick={triggerCategorizationNow}
+						class="h-7 px-3 border border-[#2A2A30] rounded-md bg-[#1F1F24] hover:bg-[#2A2A30] text-[#E6E6E8] text-[12.5px] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+					>
+						{#if runningCategorization}
+							<span class="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></span>
+							<span>Running...</span>
+						{:else}
+							<span>Run Categorization Now</span>
+						{/if}
+					</button>
 				</div>
 			</div>
 		</div>

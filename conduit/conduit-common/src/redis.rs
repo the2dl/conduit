@@ -88,6 +88,9 @@ pub mod keys {
     /// Set of manually added domain categories
     pub const CATEGORIES_MANUAL: &str = "cleargate:categories:manual";
 
+    /// Set of observed domains pending categorization
+    pub const CATEGORIES_PENDING: &str = "cleargate:categories:pending";
+
     /// Set of muted domains for desktop notifications
     pub const MUTED_NOTIFICATIONS: &str = "cleargate:notifications:muted";
 

@@ -24,12 +24,12 @@ use tracing::info;
 const PIPELINE_BATCH_SIZE: usize = 5000;
 
 #[derive(Debug, Clone, Serialize, Default)]
-struct ImportStats {
-    total_domains: u64,
-    categories: HashMap<String, u64>,
-    skipped_entries: u64,
-    errors: Vec<String>,
-    duration_ms: u64,
+pub(crate) struct ImportStats {
+    pub total_domains: u64,
+    pub categories: HashMap<String, u64>,
+    pub skipped_entries: u64,
+    pub errors: Vec<String>,
+    pub duration_ms: u64,
 }
 
 /// Validate that a category name extracted from a tar path is safe.
@@ -144,28 +144,26 @@ async fn import_ut1(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let start = std::time::Instant::now();
     info!(size_mb = body.len() / (1024 * 1024), "Received UT1 tarball");
+    match import_ut1_data(&state, body.to_vec()).await {
+        Ok(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ),
+    }
+}
 
-    // Parse tarball in blocking thread (synchronous IO)
-    let data = body.to_vec();
-    let parsed = tokio::task::spawn_blocking(move || parse_tarball(&data)).await;
-
-    let (pairs, mut stats) = match parsed {
-        Ok(Ok((pairs, stats))) => (pairs, stats),
-        Ok(Err(e)) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e})),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Parse task failed: {e}")})),
-            );
-        }
-    };
+/// Core function to parse and import UT1 tarball data bytes.
+pub(crate) async fn import_ut1_data(
+    state: &AppState,
+    data: Vec<u8>,
+) -> anyhow::Result<ImportStats> {
+    let start = std::time::Instant::now();
+    let (pairs, mut stats) = tokio::task::spawn_blocking(move || parse_tarball(&data))
+        .await
+        .map_err(|e| anyhow::anyhow!("Parse task failed: {e}"))?
+        .map_err(|e| anyhow::anyhow!("Tarball parse error: {e}"))?;
 
     info!(
         total = stats.total_domains,
@@ -173,21 +171,14 @@ async fn import_ut1(
         "Parsed tarball, inserting into Dragonfly"
     );
 
-    if let Err(resp) = bulk_insert(&state, &pairs, &mut stats).await {
-        return resp;
-    }
+    let mut insert_stats = stats.clone();
+    bulk_insert(state, &pairs, &mut insert_stats)
+        .await
+        .map_err(|_| anyhow::anyhow!("Bulk insert into Dragonfly failed"))?;
 
     stats.duration_ms = start.elapsed().as_millis() as u64;
-
-    info!(
-        total = stats.total_domains,
-        categories = stats.categories.len(),
-        duration_ms = stats.duration_ms,
-        "UT1 import complete"
-    );
-
     super::publish_reload(&state.pool, "categories").await;
-    (StatusCode::OK, Json(serde_json::json!(stats)))
+    Ok(stats)
 }
 
 // ── CSV import ──────────────────────────────────────────────────────

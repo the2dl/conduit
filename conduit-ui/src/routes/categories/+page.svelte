@@ -37,6 +37,35 @@
 	let newDomain = $state('');
 	let newCategory = $state('social');
 
+	let pendingCount = $state(0);
+	let autoCategorizing = $state(false);
+
+	async function loadPending() {
+		try {
+			const res = await api.categories.pending(1);
+			pendingCount = res.count;
+		} catch {
+			/* ignore */
+		}
+	}
+
+	async function runAutoCategorize() {
+		autoCategorizing = true;
+		try {
+			const res = await api.categories.autoCategorize();
+			if (res.success) {
+				showToast(`Categorized ${res.categorized_count} domains using ${res.agent_used}`);
+			} else {
+				showToast(`Completed with warnings: ${res.error || 'Check logs'}`);
+			}
+			await Promise.all([loadCategories(), loadPending()]);
+		} catch (err: any) {
+			showToast(err.message || 'Auto-categorization failed');
+		} finally {
+			autoCategorizing = false;
+		}
+	}
+
 	async function loadCategories() {
 		loading = true;
 		try {
@@ -60,7 +89,7 @@
 			await api.categories.add({ domain: d, category: newCategory });
 			newDomain = '';
 			showToast(`${d} → ${newCategory}`);
-			await loadCategories();
+			await Promise.all([loadCategories(), loadPending()]);
 		} catch (e: any) {
 			showToast(e.message || 'Failed to add category mapping');
 		}
@@ -90,6 +119,7 @@
 			newDomain = dom;
 		}
 		loadCategories();
+		loadPending();
 	});
 </script>
 
@@ -108,6 +138,31 @@
 			Bulk import
 		</button>
 	</header>
+
+	<!-- Pending Categorization Banner -->
+	{#if pendingCount > 0}
+		<div class="shrink-0 flex items-center justify-between px-7 py-2.5 bg-[#17141A] border-b border-[#2D1B28] text-xs">
+			<div class="flex items-center gap-2">
+				<span class="w-2 h-2 rounded-full bg-[#ED2377] animate-pulse"></span>
+				<span class="text-[#E6E6E8]">
+					<span class="font-semibold text-white">{pendingCount.toLocaleString()}</span> uncategorized {pendingCount === 1 ? 'domain' : 'domains'} observed in live traffic
+				</span>
+			</div>
+			<button
+				type="button"
+				disabled={autoCategorizing}
+				onclick={runAutoCategorize}
+				class="h-6 px-2.5 rounded border border-[#ED2377]/40 bg-[#ED2377]/10 hover:bg-[#ED2377]/20 text-[#ED2377] font-medium text-[11.5px] cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-1.5"
+			>
+				{#if autoCategorizing}
+					<span class="w-2.5 h-2.5 border-2 border-[#ED2377]/20 border-t-[#ED2377] rounded-full animate-spin"></span>
+					<span>Categorizing...</span>
+				{:else}
+					<span>Categorize with local agent</span>
+				{/if}
+			</button>
+		</div>
+	{/if}
 
 	<!-- Toolbar Area -->
 	<div class="shrink-0 flex flex-col gap-2.5 p-3 px-7 border-b border-[#1F1F24]">

@@ -68,6 +68,9 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
     });
 
+    // Start background domain auto-categorization scheduler
+    routes::categories::spawn_auto_categorizer(state.clone());
+
     let app = routes::build_router(state, limiter);
 
     let addr: SocketAddr = config.api_addr.parse()?;

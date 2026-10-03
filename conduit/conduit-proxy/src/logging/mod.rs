@@ -188,6 +188,23 @@ async fn run_logging_pipeline(
             .await;
         }
 
+        // Track uncategorized domains for automated categorization
+        if entry.category.as_deref() == Some("uncategorized") {
+            let host = entry.host.split(':').next().unwrap_or(&entry.host).to_lowercase();
+            if !host.is_empty() && host.parse::<std::net::IpAddr>().is_err() && host != "localhost" {
+                let pool_c = pool.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut conn) = pool_c.get().await {
+                        let _: Result<(), _> = redis::cmd("SADD")
+                            .arg(conduit_common::redis::keys::CATEGORIES_PENDING)
+                            .arg(host)
+                            .query_async(&mut *conn)
+                            .await;
+                    }
+                });
+            }
+        }
+
         // Stdout JSON (always)
         if let Ok(json) = serde_json::to_string(&entry) {
             println!("{json}");
