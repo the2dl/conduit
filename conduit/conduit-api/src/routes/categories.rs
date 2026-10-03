@@ -663,7 +663,7 @@ pub async fn execute_auto_categorization(
         return Err(anyhow::anyhow!("Redis pool unavailable"));
     };
 
-    // Determine agent
+    let is_explicit_agent = agent_override.is_some() && agent_override.as_deref() != Some("none");
     let agent_name = if let Some(a) = agent_override {
         a
     } else {
@@ -674,8 +674,15 @@ pub async fn execute_auto_categorization(
             .unwrap_or_else(|| "agy".to_string())
     };
 
-    let binary = resolve_agent_command(&agent_name)
-        .ok_or_else(|| anyhow::anyhow!("Agent executable not found for '{agent_name}'"))?;
+    let binary_opt = if agent_name == "none" {
+        None
+    } else {
+        resolve_agent_command(&agent_name)
+    };
+
+    if is_explicit_agent && binary_opt.is_none() {
+        return Err(anyhow::anyhow!("Agent executable not found for '{agent_name}'"));
+    }
 
     // Determine domains to categorize
     let domains_to_categorize: Vec<String> = if let Some(doms) = domain_override {
@@ -692,42 +699,46 @@ pub async fn execute_auto_categorization(
 
     let mut result = AutoCategorizeResult {
         success: true,
-        agent_used: agent_name.clone(),
+        agent_used: if binary_opt.is_some() { agent_name.clone() } else { "none".to_string() },
         ..Default::default()
     };
 
-    if !domains_to_categorize.is_empty() {
-        info!(
-            count = domains_to_categorize.len(),
-            agent = %agent_name,
-            "Running agent categorization"
-        );
+    if let Some(binary) = binary_opt {
+        if !domains_to_categorize.is_empty() {
+            info!(
+                count = domains_to_categorize.len(),
+                agent = %agent_name,
+                "Running agent categorization"
+            );
 
-        match run_agent_categorization(&agent_name, &binary, &domains_to_categorize).await {
-            Ok((categorized_pairs, failed)) => {
-                if !categorized_pairs.is_empty() {
-                    let mut pipe = redis::pipe();
-                    for (d, c) in &categorized_pairs {
-                        pipe.set(keys::domain_category(d), c);
-                        pipe.srem(keys::CATEGORIES_PENDING, d);
-                        result.categorized.push(CategoryEntry {
-                            domain: d.clone(),
-                            category: c.clone(),
-                            source: format!("agent:{agent_name}"),
-                        });
+            match run_agent_categorization(&agent_name, &binary, &domains_to_categorize).await {
+                Ok((categorized_pairs, failed)) => {
+                    if !categorized_pairs.is_empty() {
+                        let mut pipe = redis::pipe();
+                        for (d, c) in &categorized_pairs {
+                            pipe.set(keys::domain_category(d), c);
+                            pipe.srem(keys::CATEGORIES_PENDING, d);
+                            result.categorized.push(CategoryEntry {
+                                domain: d.clone(),
+                                category: c.clone(),
+                                source: format!("agent:{agent_name}"),
+                            });
+                        }
+                        let _: () = pipe.query_async(&mut *conn).await.unwrap_or(());
+                        super::publish_reload(&state.pool, "categories").await;
                     }
-                    let _: () = pipe.query_async(&mut *conn).await.unwrap_or(());
-                    super::publish_reload(&state.pool, "categories").await;
+                    result.categorized_count = result.categorized.len();
+                    result.failed = failed;
                 }
-                result.categorized_count = result.categorized.len();
-                result.failed = failed;
-            }
-            Err(e) => {
-                warn!(error = %e, agent = %agent_name, "Agent categorization failed");
-                result.success = false;
-                result.error = Some(e.to_string());
+                Err(e) => {
+                    warn!(error = %e, agent = %agent_name, "Agent categorization failed");
+                    result.success = false;
+                    result.error = Some(e.to_string());
+                }
             }
         }
+    } else if !domains_to_categorize.is_empty() {
+        info!("No LLM agent configured or installed; skipping domain agent categorization");
     }
 
     // UT1 sync if requested or enabled
@@ -886,11 +897,18 @@ async fn get_pending_categories(
 
 async fn get_categorization_agents() -> impl IntoResponse {
     let available = detect_available_agents();
+    let default = if available.contains(&"agy".to_string()) {
+        "agy"
+    } else if let Some(first) = available.first() {
+        first.as_str()
+    } else {
+        "none"
+    };
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "available": available,
-            "default": "agy"
+            "default": default
         })),
     )
 }

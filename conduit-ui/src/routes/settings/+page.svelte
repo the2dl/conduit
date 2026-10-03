@@ -422,6 +422,7 @@
 							bind:value={draftConfig.auto_categorize_agent}
 							class="h-7 px-2.5 border border-[#2A2A30] rounded bg-[#0A0A0B] text-[#E6E6E8] font-mono text-xs focus:outline-none focus:border-[#ED2377]"
 						>
+							<option value="none">none (no LLM)</option>
 							{#each ['agy', 'codex', 'claude'] as agent}
 								{@const detected = availableAgents.includes(agent)}
 								<option value={agent}>
