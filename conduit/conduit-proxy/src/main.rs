@@ -101,13 +101,7 @@ fn main() -> anyhow::Result<()> {
                 // Try disk if configured paths exist
                 let cert_path = config.ca_cert_path();
                 let key_path = config.ca_key_path();
-                let ca = if cert_path.exists() && key_path.exists() {
-                    info!("Loading CA from disk");
-                    CertAuthority::load_or_generate(&cert_path, &key_path)?
-                } else {
-                    info!("No CA in Dragonfly or on disk, generating new CA");
-                    CertAuthority::generate()?
-                };
+                let ca = CertAuthority::load_or_generate(&cert_path, &key_path)?;
                 if let Err(e) =
                     rt.block_on(conduit_common::ca::store_ca_to_dragonfly(&pool_ref, &ca))
                 {

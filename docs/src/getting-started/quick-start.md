@@ -1,10 +1,14 @@
 # Quick Start
 
-## 1. Start Dragonfly
+## 1. Start Valkey
+
+Ensure Valkey is running (or start it via systemd):
 
 ```sh
-docker compose up -d
+sudo systemctl enable --now valkey
 ```
+
+*(Alternatively, Docker Compose can run Dragonfly/Valkey on port `6379`: `docker compose up -d`)*
 
 ## 2. Create a config file
 
@@ -19,7 +23,7 @@ The defaults work out of the box for local development. Key settings to review:
 ```toml
 listen_addr = "0.0.0.0:8888"    # proxy listener
 api_addr = "0.0.0.0:8443"       # management API
-dragonfly_url = "redis://127.0.0.1:6380"
+dragonfly_url = "redis://127.0.0.1:6379" # native Valkey / Redis
 tls_intercept = true             # set false for passthrough
 ```
 

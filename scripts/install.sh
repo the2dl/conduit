@@ -1,0 +1,526 @@
+#!/usr/bin/env bash
+# install.sh — Turnkey Native Installer for Conduit Security Gateway
+# Supports: Arch Linux, Debian/Ubuntu, Fedora/RHEL
+# Datastore: Native Valkey (with fallback to Redis)
+#
+# Usage:
+#   ./scripts/install.sh [OPTIONS]
+#
+# Options:
+#   --system         Install as a hardened systemd system service under /etc/conduit
+#                    and /usr/local/bin with unprivileged 'conduit' user (requires sudo)
+#   --user           Install as a systemd user service in ~/.config/systemd/user
+#   --trust-ca       Install Conduit root CA into OS certificate trust store (requires sudo)
+#   --system-proxy   Install /etc/profile.d/conduit.sh to route all shell traffic (requires sudo)
+#   --firewall       Lock down host firewall to prevent bypassing Conduit (requires sudo)
+#   --skip-build     Skip compiling release binaries and UI (use existing build)
+#   --skip-deps      Skip installing distro packages
+#   --skip-seed      Skip threat feeds and domain category dataset seeding
+#   -y, --yes        Non-interactive mode (accept all defaults)
+#   -h, --help       Show this help message
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$ROOT_DIR"
+
+# ── Defaults ───────────────────────────────────────────────────────────
+INSTALL_MODE="auto" # 'system' or 'user'
+TRUST_CA=false
+SYSTEM_PROXY=false
+ENABLE_FIREWALL=false
+SKIP_BUILD=false
+SKIP_DEPS=false
+SKIP_SEED=false
+NON_INTERACTIVE=false
+
+# ── Argument Parsing ───────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --system) INSTALL_MODE="system"; shift ;;
+    --user) INSTALL_MODE="user"; shift ;;
+    --trust-ca) TRUST_CA=true; shift ;;
+    --system-proxy) SYSTEM_PROXY=true; shift ;;
+    --firewall|--lockdown) ENABLE_FIREWALL=true; shift ;;
+    --skip-build) SKIP_BUILD=true; shift ;;
+    --skip-deps) SKIP_DEPS=true; shift ;;
+    --skip-seed) SKIP_SEED=true; shift ;;
+    -y|--yes) NON_INTERACTIVE=true; shift ;;
+    -h|--help)
+      cat << 'EOF'
+Conduit Security Gateway — Native Linux Installer
+
+Usage:
+  ./scripts/install.sh [OPTIONS]
+
+Options:
+  --system         Install as system-wide daemon in /usr/local/bin & /etc/conduit (requires sudo)
+  --user           Install as user-level service in ~/.config/systemd/user (default for non-root)
+  --trust-ca       Install Conduit root CA into OS certificate trust store (requires sudo)
+  --system-proxy   Install /etc/profile.d/conduit.sh to route shell traffic (requires sudo)
+  --firewall       Lock down host egress firewall to enforce proxying (requires sudo)
+  --skip-build     Skip compiling release binaries and UI
+  --skip-deps      Skip package manager dependency installation
+  --skip-seed      Skip threat feeds and category dataset seeding
+  -y, --yes        Non-interactive mode (proceed without prompts)
+  -h, --help       Show this help message
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Resolve install mode if auto
+if [ "$INSTALL_MODE" = "auto" ]; then
+  if [ "$(id -u)" -eq 0 ]; then
+    INSTALL_MODE="system"
+  else
+    INSTALL_MODE="user"
+  fi
+fi
+
+# Determine sudo command
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  if command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+  else
+    echo "Error: sudo is required for system configuration steps." >&2
+    exit 1
+  fi
+fi
+
+# Detect calling user
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(eval echo "~$REAL_USER")"
+
+echo "=========================================================="
+echo "       Conduit Security Gateway — Native Installer        "
+echo "=========================================================="
+echo "Source root:   $ROOT_DIR"
+echo "Install mode:  $INSTALL_MODE"
+echo "Target user:   $REAL_USER"
+echo ""
+
+# ── 1. OS & Package Manager Detection ─────────────────────────────────
+echo "--- 1. Detecting Linux Distribution ---"
+
+DISTRO="unknown"
+PKG_MGR="unknown"
+
+if [ -f /etc/os-release ]; then
+  # shellcheck source=/dev/null
+  . /etc/os-release
+  DISTRO_ID="${ID:-unknown}"
+  DISTRO_LIKE="${ID_LIKE:-}"
+else
+  DISTRO_ID="unknown"
+  DISTRO_LIKE=""
+fi
+
+case "$DISTRO_ID" in
+  arch|manjaro|endeavouros|garuda|cachyos|artix)
+    DISTRO="arch"
+    PKG_MGR="pacman"
+    ;;
+  debian|ubuntu|linuxmint|pop|elementary|raspbian)
+    DISTRO="debian"
+    PKG_MGR="apt"
+    ;;
+  fedora|rhel|centos|rocky|almalinux|ol)
+    DISTRO="fedora"
+    PKG_MGR="dnf"
+    ;;
+  *)
+    if [[ "$DISTRO_LIKE" == *"arch"* ]]; then
+      DISTRO="arch"
+      PKG_MGR="pacman"
+    elif [[ "$DISTRO_LIKE" == *"debian"* || "$DISTRO_LIKE" == *"ubuntu"* ]]; then
+      DISTRO="debian"
+      PKG_MGR="apt"
+    elif [[ "$DISTRO_LIKE" == *"fedora"* || "$DISTRO_LIKE" == *"rhel"* ]]; then
+      DISTRO="fedora"
+      PKG_MGR="dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+      DISTRO="arch"
+      PKG_MGR="pacman"
+    elif command -v apt-get >/dev/null 2>&1; then
+      DISTRO="debian"
+      PKG_MGR="apt"
+    elif command -v dnf >/dev/null 2>&1; then
+      DISTRO="fedora"
+      PKG_MGR="dnf"
+    fi
+    ;;
+esac
+
+echo "  Distribution: $DISTRO ($DISTRO_ID)"
+echo "  Package Tool: $PKG_MGR"
+
+# ── 2. Install Distro Dependencies & Valkey ───────────────────────────
+if [ "$SKIP_DEPS" = false ]; then
+  echo ""
+  echo "--- 2. Installing System Dependencies & Valkey ---"
+
+  case "$DISTRO" in
+    arch)
+      echo "  Installing Arch packages (base-devel, cmake, perl, nodejs, npm, valkey)..."
+      $SUDO pacman -S --needed --noconfirm base-devel cmake perl pkgconf openssl nodejs npm valkey
+      ;;
+    debian)
+      echo "  Updating apt index and installing build dependencies..."
+      $SUDO apt-get update -y
+      $SUDO apt-get install -y build-essential cmake perl pkg-config libssl-dev nodejs npm curl ca-certificates
+
+      # Check for valkey vs redis-server in Debian/Ubuntu repos
+      if apt-cache show valkey >/dev/null 2>&1; then
+        echo "  Installing native 'valkey' package..."
+        $SUDO apt-get install -y valkey
+      elif apt-cache show valkey-server >/dev/null 2>&1; then
+        echo "  Installing native 'valkey-server' package..."
+        $SUDO apt-get install -y valkey-server
+      else
+        echo "  Notice: 'valkey' package not found in current apt repos. Installing 'redis-server' (BSD compatible)..."
+        $SUDO apt-get install -y redis-server
+      fi
+      ;;
+    fedora)
+      echo "  Installing Fedora packages (@development-tools, cmake, perl, nodejs, npm, valkey)..."
+      $SUDO dnf install -y @development-tools cmake perl openssl-devel nodejs npm valkey
+      ;;
+    *)
+      echo "  Warning: Unrecognized distro family '$DISTRO'. Skipping automated package installation."
+      echo "  Ensure cmake, perl, nodejs, npm, and valkey/redis are installed."
+      ;;
+  esac
+else
+  echo ""
+  echo "--- Skipping package manager dependency installation (--skip-deps) ---"
+fi
+
+# ── 3. Check / Install Rust Toolchain ─────────────────────────────────
+echo ""
+echo "--- 3. Verifying Rust Toolchain ---"
+
+if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+  if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.cargo/env"
+  elif [ -f "$REAL_HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    . "$REAL_HOME/.cargo/env"
+  fi
+fi
+
+if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+  echo "  Rust toolchain not found. Installing via rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # shellcheck source=/dev/null
+  . "$HOME/.cargo/env"
+fi
+
+echo "  Cargo version: $(cargo --version)"
+echo "  Rustc version: $(rustc --version)"
+
+# ── 4. Start & Enable Valkey / Datastore Service ───────────────────────
+echo ""
+echo "--- 4. Configuring Valkey Datastore ---"
+
+DATASTORE_SVC=""
+for svc in valkey valkey-server redis redis-server; do
+  if systemctl list-unit-files "$svc.service" >/dev/null 2>&1 | grep -q "$svc.service"; then
+    DATASTORE_SVC="$svc"
+    break
+  fi
+done
+
+if [ -n "$DATASTORE_SVC" ]; then
+  echo "  Enabling and starting $DATASTORE_SVC.service..."
+  $SUDO systemctl enable --now "$DATASTORE_SVC.service"
+else
+  echo "  Warning: No native valkey/redis systemd service unit found. Checking port 6379..."
+fi
+
+# Verify port 6379 connectivity
+echo -n "  Verifying datastore response on :6379..."
+PORT_OK=false
+for i in {1..30}; do
+  if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+    PORT_OK=true
+    break
+  elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+    PORT_OK=true
+    break
+  elif (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+    PORT_OK=true
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$PORT_OK" = true ]; then
+  echo " online."
+else
+  # Check 6380 fallback
+  if (echo > /dev/tcp/127.0.0.1/6380) 2>/dev/null; then
+    echo " port 6379 inactive, but found datastore on :6380."
+  else
+    echo " warning: Port 6379 not responding yet. Proceeding with installation..."
+  fi
+fi
+
+# ── 5. Compile Conduit UI & Release Binaries ──────────────────────────
+if [ "$SKIP_BUILD" = false ]; then
+  echo ""
+  echo "--- 5. Building Conduit Frontend UI ---"
+  (
+    cd "$ROOT_DIR/conduit-ui"
+    if [ ! -d "node_modules" ]; then
+      echo "  Running npm install..."
+      npm install --silent
+    fi
+    echo "  Compiling SvelteKit dashboard..."
+    npm run build
+  )
+  echo "  UI build complete."
+
+  echo ""
+  echo "--- 6. Compiling Rust Binaries (conduit-api, conduit-proxy) ---"
+  (
+    cd "$ROOT_DIR"
+    cargo build --release --bin conduit-api --bin conduit-proxy
+  )
+  echo "  Release binaries compiled successfully."
+else
+  echo ""
+  echo "--- Skipping compilation (--skip-build) ---"
+fi
+
+# ── 6. Installation (System or User) ──────────────────────────────────
+if [ "$INSTALL_MODE" = "system" ]; then
+  echo ""
+  echo "--- 7. Installing Conduit as System Service ---"
+
+  # Create dedicated conduit system user/group
+  if ! getent group conduit >/dev/null 2>&1; then
+    echo "  Creating system group 'conduit'..."
+    $SUDO groupadd -r conduit
+  fi
+
+  if ! getent passwd conduit >/dev/null 2>&1; then
+    echo "  Creating system user 'conduit'..."
+    $SUDO useradd -r -g conduit -d /var/lib/conduit -s /usr/sbin/nologin -c "Conduit Security Gateway" conduit
+  fi
+
+  # Create directories
+  echo "  Creating system directories (/etc/conduit, /var/lib/conduit, /var/log/conduit)..."
+  $SUDO mkdir -p /usr/local/bin /etc/conduit /etc/conduit/ca /var/lib/conduit /var/lib/conduit/ui /var/log/conduit
+
+  # Copy binaries
+  echo "  Installing binaries to /usr/local/bin..."
+  $SUDO cp "$ROOT_DIR/target/release/conduit-api" /usr/local/bin/conduit-api
+  $SUDO cp "$ROOT_DIR/target/release/conduit-proxy" /usr/local/bin/conduit-proxy
+  $SUDO cp "$ROOT_DIR/scripts/conduit-ctl.sh" /usr/local/bin/conduit-ctl
+  $SUDO chmod 755 /usr/local/bin/conduit-api /usr/local/bin/conduit-proxy /usr/local/bin/conduit-ctl
+
+  # Copy UI build
+  echo "  Installing UI dashboard to /var/lib/conduit/ui..."
+  $SUDO cp -r "$ROOT_DIR/conduit-ui/build/"* /var/lib/conduit/ui/
+
+  # Install configuration if missing
+  if [ ! -f /etc/conduit/conduit.toml ]; then
+    echo "  Installing default configuration to /etc/conduit/conduit.toml..."
+    $SUDO cp "$ROOT_DIR/conduit.example.toml" /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^# ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^# ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^# ui_dir = .*|ui_dir = "/var/lib/conduit/ui"|' /etc/conduit/conduit.toml
+    if ! grep -q "^ui_dir =" /etc/conduit/conduit.toml; then
+      echo 'ui_dir = "/var/lib/conduit/ui"' | $SUDO tee -a /etc/conduit/conduit.toml >/dev/null
+    fi
+  else
+    echo "  Preserving existing /etc/conduit/conduit.toml."
+  fi
+
+  # Set secure permissions
+  echo "  Setting ownership and permissions for 'conduit' user..."
+  $SUDO chown -R conduit:conduit /etc/conduit /var/lib/conduit /var/log/conduit
+  $SUDO chmod 750 /etc/conduit
+  $SUDO chmod 700 /etc/conduit/ca
+  $SUDO chmod 755 /var/lib/conduit
+
+  # Install systemd unit files
+  echo "  Installing systemd system units (/etc/systemd/system/)..."
+  $SUDO cp "$ROOT_DIR/deploy/systemd/system/"* /etc/systemd/system/
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now conduit.target
+
+  echo "  Systemd system services enabled and started."
+
+else
+  echo ""
+  echo "--- 7. Installing Conduit as User Service ---"
+
+  mkdir -p "$ROOT_DIR/logs" "$ROOT_DIR/ca" "$HOME/.config/systemd/user"
+
+  if [ ! -f "$ROOT_DIR/conduit.toml" ]; then
+    echo "  Creating local conduit.toml from example..."
+    cp "$ROOT_DIR/conduit.example.toml" "$ROOT_DIR/conduit.toml"
+    sed -i 's|^# ca_cert_path = .*|ca_cert_path = "ca/ca.pem"|' "$ROOT_DIR/conduit.toml"
+    sed -i 's|^# ca_key_path = .*|ca_key_path = "ca/ca-key.pem"|' "$ROOT_DIR/conduit.toml"
+    sed -i 's|^# ui_dir = .*|ui_dir = "./conduit-ui/build"|' "$ROOT_DIR/conduit.toml"
+    if ! grep -q "^ui_dir =" "$ROOT_DIR/conduit.toml"; then
+      echo 'ui_dir = "./conduit-ui/build"' >> "$ROOT_DIR/conduit.toml"
+    fi
+  fi
+
+  cp "$ROOT_DIR/deploy/systemd/user/"* "$HOME/.config/systemd/user/"
+  systemctl --user daemon-reload
+  systemctl --user enable --now conduit.target
+  echo "  Systemd user services enabled and started."
+fi
+
+# ── 8. Health Check ───────────────────────────────────────────────────
+echo ""
+echo "--- 8. Verifying Service Health ---"
+echo -n "  Waiting for Conduit API on :8443..."
+API_READY=false
+for i in {1..40}; do
+  if curl -sf http://127.0.0.1:8443/api/v1/health >/dev/null 2>&1; then
+    API_READY=true
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$API_READY" = true ]; then
+  echo " healthy."
+  curl -s http://127.0.0.1:8443/api/v1/health | head -n1
+  echo ""
+else
+  echo " warning: API did not respond within 20 seconds. Check logs with 'conduit-ctl status'."
+fi
+
+# ── 9. Datastore Seeding ──────────────────────────────────────────────
+if [ "$SKIP_SEED" = false ]; then
+  echo ""
+  echo "--- 9. Seeding Datastore (Threat Feeds & Categories) ---"
+  export CONDUIT_USER="$REAL_USER"
+  "$ROOT_DIR/scripts/seed-dragonfly.sh"
+else
+  echo ""
+  echo "--- Skipping dataset seeding (--skip-seed) ---"
+fi
+
+# ── 10. Root CA Certificate Export & OS Trust ─────────────────────────
+echo ""
+echo "--- 10. Root CA Certificate Setup ---"
+CA_PEM=""
+if [ "$INSTALL_MODE" = "system" ]; then
+  CA_PEM="/etc/conduit/ca/ca.pem"
+else
+  CA_PEM="$ROOT_DIR/ca/ca.pem"
+  mkdir -p "$ROOT_DIR/ca"
+  curl -sf http://127.0.0.1:8443/api/v1/ca/cert -o "$CA_PEM" 2>/dev/null || true
+fi
+
+if [ "$TRUST_CA" = true ]; then
+  echo "  Installing Conduit Root CA into system trust store..."
+  if [ ! -f "$CA_PEM" ] || [ ! -s "$CA_PEM" ]; then
+    # Try fetching from API
+    curl -sf http://127.0.0.1:8443/api/v1/ca/cert -o /tmp/conduit-ca.pem 2>/dev/null || true
+    CA_SOURCE="/tmp/conduit-ca.pem"
+  else
+    CA_SOURCE="$CA_PEM"
+  fi
+
+  if [ -f "$CA_SOURCE" ] && [ -s "$CA_SOURCE" ]; then
+    if command -v update-ca-certificates >/dev/null 2>&1; then
+      # Debian / Ubuntu
+      $SUDO cp "$CA_SOURCE" /usr/local/share/ca-certificates/conduit-ca.crt
+      $SUDO update-ca-certificates
+      echo "  Installed into Debian/Ubuntu trust store via update-ca-certificates."
+    elif command -v trust >/dev/null 2>&1; then
+      # Arch Linux
+      $SUDO cp "$CA_SOURCE" /etc/ca-certificates/trust-source/anchors/conduit-ca.crt
+      $SUDO trust extract-compat
+      echo "  Installed into Arch Linux trust store via trust extract-compat."
+    elif command -v update-ca-trust >/dev/null 2>&1; then
+      # Fedora / RHEL
+      $SUDO cp "$CA_SOURCE" /etc/pki/ca-trust/source/anchors/conduit-ca.crt
+      $SUDO update-ca-trust
+      echo "  Installed into Fedora/RHEL trust store via update-ca-trust."
+    fi
+    rm -f /tmp/conduit-ca.pem
+  else
+    echo "  Warning: Could not obtain CA certificate to install."
+  fi
+else
+  echo "  CA Certificate available at: $CA_PEM"
+  echo "  To install and trust system-wide: sudo $0 --trust-ca"
+fi
+
+# ── 11. Shell & System Proxy Environment ──────────────────────────────
+echo ""
+echo "--- 11. Shell Environment Helper ---"
+chmod +x "$ROOT_DIR/scripts/env.sh" "$ROOT_DIR/scripts/unenv.sh" "$ROOT_DIR/scripts/conduit-ctl.sh"
+
+if [ "$SYSTEM_PROXY" = true ]; then
+  echo "  Installing /etc/profile.d/conduit.sh for system-wide shell proxying..."
+  cat << 'EOF' | $SUDO tee /etc/profile.d/conduit.sh >/dev/null
+# Conduit Security Gateway Shell Proxy Environment
+export http_proxy="http://127.0.0.1:8888"
+export https_proxy="http://127.0.0.1:8888"
+export HTTP_PROXY="http://127.0.0.1:8888"
+export HTTPS_PROXY="http://127.0.0.1:8888"
+export ALL_PROXY="http://127.0.0.1:8888"
+export NO_PROXY="localhost,127.0.0.1,::1,.local,.internal"
+export no_proxy="localhost,127.0.0.1,::1,.local,.internal"
+EOF
+  $SUDO chmod 644 /etc/profile.d/conduit.sh
+  echo "  /etc/profile.d/conduit.sh installed."
+else
+  echo "  To route your current shell: source ./scripts/env.sh"
+  echo "  To install system-wide across all shells: sudo $0 --system-proxy"
+fi
+
+# ── 12. Host Egress Firewall Lockdown ─────────────────────────────────
+if [ "$ENABLE_FIREWALL" = true ]; then
+  echo ""
+  echo "--- 12. Egress Firewall Lockdown ---"
+  TARGET_PROXY_USER="conduit"
+  if [ "$INSTALL_MODE" = "user" ]; then
+    TARGET_PROXY_USER="$REAL_USER"
+  fi
+  echo "  Enforcing firewall lockdown for proxy user '$TARGET_PROXY_USER'..."
+  $SUDO "$ROOT_DIR/scripts/setup-firewall.sh" --enable "$TARGET_PROXY_USER"
+fi
+
+# ── 13. Summary ───────────────────────────────────────────────────────
+echo ""
+echo "=========================================================="
+echo "          Conduit Installation Complete!                  "
+echo "=========================================================="
+echo "  Mode:             $INSTALL_MODE"
+echo "  Management UI:    http://localhost:8443"
+echo "  HTTP/HTTPS Proxy: http://127.0.0.1:8888"
+echo "  Datastore:        Valkey on 127.0.0.1:6379"
+echo "  Prometheus Stats: http://localhost:9091"
+echo ""
+echo "  Useful Commands:"
+if [ "$INSTALL_MODE" = "system" ]; then
+  echo "    conduit-ctl status              Check status of all components"
+  echo "    sudo systemctl restart conduit  Restart Conduit services"
+  echo "    sudo journalctl -u conduit-proxy -f View proxy logs"
+else
+  echo "    ./scripts/conduit-ctl.sh status Check status of all components"
+  echo "    systemctl --user restart conduit.target Restart Conduit"
+  echo "    tail -f logs/proxy.log          View proxy logs"
+fi
+echo "    source ./scripts/env.sh         Enable proxy in current shell"
+echo "    source ./scripts/unenv.sh       Disable proxy in current shell"
+echo "=========================================================="

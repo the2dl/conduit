@@ -1,24 +1,35 @@
 [Unit]
 Description=Conduit Pingora MITM Forward Proxy
+Documentation=https://github.com/the2dl/conduit
 After=network.target conduit-api.service
 Wants=conduit-api.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/conduit
+User=conduit
+Group=conduit
+WorkingDirectory=/var/lib/conduit
 LimitNOFILE=65535
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-Environment=CONDUIT_CONFIG=%h/conduit/conduit.toml
+Environment=CONDUIT_CONFIG=/etc/conduit/conduit.toml
 Environment=RUST_LOG=info
 PassEnvironment=DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY
 ExecStartPre=/usr/bin/bash -c 'for i in {1..50}; do (curl -sf http://127.0.0.1:8443/api/v1/health >/dev/null 2>&1) && exit 0; sleep 0.2; done; exit 1'
-ExecStart=%h/conduit/target/release/conduit-proxy
+ExecStart=/usr/local/bin/conduit-proxy
 Restart=on-failure
 RestartSec=3
 KillSignal=SIGINT
 TimeoutStopSec=5
-StandardOutput=append:%h/conduit/logs/proxy.log
-StandardError=append:%h/conduit/logs/proxy.log
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/conduit /var/log/conduit /etc/conduit
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Conduit Dragonfly Datastore
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/conduit
+ExecStart=/usr/bin/docker compose up -d dragonfly
+ExecStartPost=/usr/bin/timeout 15 /usr/bin/bash -c "until /usr/bin/nc -z 127.0.0.1 6380; do sleep 0.2; done; docker exec conduit-dragonfly redis-cli -p 6379 HSET cleargate:ip_map 127.0.0.1 %u >/dev/null 2>&1 || true"
+ExecStop=/usr/bin/docker compose stop dragonfly
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

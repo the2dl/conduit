@@ -8,7 +8,12 @@ pub struct ClearGateConfig {
     pub listen_addr: String,
     #[serde(default = "default_api_addr")]
     pub api_addr: String,
-    #[serde(default = "default_dragonfly_url")]
+    #[serde(
+        default = "default_dragonfly_url",
+        alias = "valkey_url",
+        alias = "redis_url",
+        alias = "datastore_url"
+    )]
     pub dragonfly_url: String,
     #[serde(default)]
     pub ca_cert_path: Option<PathBuf>,
@@ -101,7 +106,8 @@ pub struct ClearGateConfig {
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     pub node_id: String,
-    /// Dragonfly URL with per-node credentials (overrides top-level `dragonfly_url`).
+    /// Datastore URL (Valkey/Redis/Dragonfly) with per-node credentials (overrides top-level `dragonfly_url`).
+    #[serde(alias = "valkey_url", alias = "redis_url", alias = "datastore_url")]
     pub dragonfly_url: String,
     pub name: Option<String>,
     #[serde(default = "default_heartbeat_interval")]

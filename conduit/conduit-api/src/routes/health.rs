@@ -9,9 +9,12 @@ use std::sync::Arc;
 struct HealthResponse {
     status: &'static str,
     dragonfly: bool,
+    valkey: bool,
     version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     dragonfly_keys: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keys: Option<u64>,
 }
 
 async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
@@ -37,8 +40,10 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
     Json(HealthResponse {
         status: if dragonfly_ok { "healthy" } else { "degraded" },
         dragonfly: dragonfly_ok,
+        valkey: dragonfly_ok,
         version: env!("CARGO_PKG_VERSION"),
         dragonfly_keys: keys,
+        keys,
     })
 }
 

@@ -21,27 +21,56 @@ CURL="curl -s --fail-with-body"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "=== Seeding Dragonfly via $API ==="
+echo "=== Seeding Datastore via $API ==="
+
+REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+
+# If default port 6379 is not listening, test 6380 (docker fallback)
+if ! (echo > /dev/tcp/"$REDIS_HOST"/"$REDIS_PORT") 2>/dev/null; then
+  if (echo > /dev/tcp/"$REDIS_HOST"/6380) 2>/dev/null; then
+    REDIS_PORT=6380
+  fi
+fi
 
 redis_cmd() {
-  if command -v redis-cli >/dev/null 2>&1; then
-    redis-cli -p 6380 "$@"
-  elif docker ps --filter "name=conduit-dragonfly" --format '{{.Names}}' | grep -q "conduit-dragonfly"; then
+  if command -v valkey-cli >/dev/null 2>&1; then
+    valkey-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@"
+  elif command -v redis-cli >/dev/null 2>&1; then
+    redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@"
+  elif docker ps --filter "name=conduit-dragonfly" --format '{{.Names}}' 2>/dev/null | grep -q "conduit-dragonfly"; then
     docker exec conduit-dragonfly redis-cli -p 6379 "$@"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import socket, sys
+s = socket.socket()
+try:
+    s.connect(('$REDIS_HOST', int('$REDIS_PORT')))
+    args = sys.argv[1:]
+    msg = f'*{len(args)}\r\n' + ''.join(f'\${len(a.encode())}\r\n{a}\r\n' for a in args)
+    s.sendall(msg.encode())
+    resp = s.recv(4096)
+    s.close()
+    if resp.startswith(b'-'):
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+" "$@"
   else
     return 1
   fi
 }
 
 # -----------------------------------------------------------------------
-# 1. Default user (dan / test123, bcrypt)
+# 1. Default user (dan / test123, bcrypt) and localhost IP map
 # -----------------------------------------------------------------------
 if [ "$SKIP_USER" = false ]; then
+  SEED_USER="${CONDUIT_USER:-${SUDO_USER:-$USER}}"
   echo ""
-  echo "--- Creating default user ---"
+  echo "--- Creating default user '$SEED_USER' ---"
   HASH=""
   if command -v htpasswd >/dev/null 2>&1; then
-    HASH=$(htpasswd -nbBC 12 dan test123 2>/dev/null | cut -d: -f2 || true)
+    HASH=$(htpasswd -nbBC 12 "$SEED_USER" test123 2>/dev/null | cut -d: -f2 || true)
   fi
   if [ -z "$HASH" ] && command -v python3 >/dev/null 2>&1; then
     HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'test123', bcrypt.gensalt(12)).decode('utf-8'))" 2>/dev/null || true)
@@ -51,11 +80,14 @@ if [ "$SKIP_USER" = false ]; then
     HASH='$2a$12$Q4Hgl1r7b1oO.x6wJ1kY7.M8K2mO1r5kG3n8pL9q0r1s2t3u4v5w6'
   fi
 
-  if redis_cmd HSET "cleargate:users:dan" password_hash "$HASH" >/dev/null 2>&1; then
-    echo "  User 'dan' created"
+  if redis_cmd HSET "cleargate:users:$SEED_USER" password_hash "$HASH" >/dev/null 2>&1; then
+    echo "  User '$SEED_USER' created"
   else
-    echo "  User 'dan' already exists or redis failed"
+    echo "  User '$SEED_USER' already exists or redis failed"
   fi
+
+  # Map 127.0.0.1 to current user so local development/browsing succeeds without basic auth
+  redis_cmd HSET "cleargate:ip_map" "127.0.0.1" "$SEED_USER" >/dev/null 2>&1 || true
 else
   echo ""
   echo "--- Skipping user creation (--skip-user) ---"
@@ -111,6 +143,12 @@ $CURL -X POST "$API/threat/feeds/refresh" -o /dev/null 2>/dev/null && \
 # 3. Domain categories (from CSV)
 # -----------------------------------------------------------------------
 CSV_FILE="$PROJECT_DIR/domains_categorized.csv"
+if [ ! -f "$CSV_FILE" ] && [ -f "${CSV_FILE}.gz" ]; then
+  echo ""
+  echo "--- Decompressing domains_categorized.csv.gz ---"
+  gzip -dc "${CSV_FILE}.gz" > "$CSV_FILE"
+fi
+
 if [ -f "$CSV_FILE" ]; then
   SIZE_MB=$(( $(wc -c < "$CSV_FILE") / 1048576 ))
   LINES=$(wc -l < "$CSV_FILE" | tr -d ' ')

@@ -1,48 +1,82 @@
 # Installation
 
-## Prerequisites
+## Turnkey Native Installation (Recommended)
+
+Conduit includes a turnkey installer script (`scripts/install.sh`) that detects your Linux distribution (**Arch Linux**, **Debian/Ubuntu**, **Fedora/RHEL**), installs native dependencies and the **Valkey** datastore, compiles the SvelteKit UI and release binaries, and sets up systemd services.
+
+### System Service Installation (Production)
+
+Installs binaries to `/usr/local/bin`, configuration to `/etc/conduit/conduit.toml`, SvelteKit UI to `/var/lib/conduit/ui`, and enables hardened systemd system services under an unprivileged `conduit` user:
+
+```sh
+git clone https://github.com/the2dl/conduit.git
+cd conduit
+sudo ./scripts/install.sh --system --trust-ca --system-proxy
+```
+
+### User Service Installation (Local / Desktop)
+
+Installs as a user-level systemd service (`~/.config/systemd/user`) in your current environment:
+
+```sh
+./scripts/install.sh --user
+```
+
+### Installer Options
+
+| Flag | Description |
+|---|---|
+| `--system` | Install system-wide daemons and config under `/etc/conduit` (requires sudo) |
+| `--user` | Install systemd user services under `~/.config/systemd/user` |
+| `--trust-ca` | Install and trust Conduit root CA into OS certificate store |
+| `--system-proxy` | Configure `/etc/profile.d/conduit.sh` to route all shells through Conduit |
+| `--firewall` | Lock down host egress firewall (nftables/iptables) to prevent proxy bypass |
+| `--skip-build` | Skip building release binaries and UI (if already built) |
+| `--skip-deps` | Skip package manager dependency installation |
+| `--skip-seed` | Skip initial threat feeds and category database seeding |
+| `-y, --yes` | Run non-interactively without prompts |
+
+---
+
+## Manual Prerequisites & Building
+
+If you prefer to install manually without the automated script:
 
 - **Rust toolchain** (stable) — install via [rustup](https://rustup.rs/)
-- **cmake** and **libclang-dev** — required for BoringSSL compilation
-- **Dragonfly** (or Redis) — used for policy storage, logs, and coordination
+- **cmake**, **perl**, and build essentials — required for BoringSSL compilation
+- **Node.js** and **npm** — required for the SvelteKit management UI
+- **Valkey** (or Redis/Dragonfly) — high-performance in-memory datastore on port `6379`
 
-### macOS
+### Distribution Packages
+
+- **Arch Linux:** `sudo pacman -S --needed base-devel cmake perl nodejs npm valkey`
+- **Ubuntu/Debian:** `sudo apt install -y build-essential cmake perl pkg-config libssl-dev nodejs npm valkey` (or `valkey-server` / `redis-server`)
+- **Fedora/RHEL:** `sudo dnf install -y @development-tools cmake perl openssl-devel nodejs npm valkey`
+
+### Build from Source
 
 ```sh
-brew install cmake llvm
+# Build UI dashboard
+cd conduit-ui
+npm install && npm run build
+cd ..
+
+# Build release binaries
+cargo build --release --bin conduit-api --bin conduit-proxy
 ```
 
-### Ubuntu/Debian
+This produces:
+- `target/release/conduit-proxy` — the Pingora MITM forward proxy
+- `target/release/conduit-api` — the management REST API and UI host
+
+### Start Valkey
 
 ```sh
-apt install cmake libclang-dev build-essential
+sudo systemctl enable --now valkey
 ```
 
-## Build from source
+### Verify
 
 ```sh
-git clone https://github.com/dan/conduit-proxy.git
-cd conduit-proxy
-cargo build --release
-```
-
-This produces two binaries:
-
-- `target/release/conduit-proxy` — the forward proxy
-- `target/release/conduit-api` — the management API
-
-## Run Dragonfly
-
-The easiest way to get Dragonfly running is with the included Docker Compose file:
-
-```sh
-docker compose up -d
-```
-
-This starts Dragonfly on port `6380`.
-
-## Verify
-
-```sh
-./target/release/conduit-proxy --help
+./scripts/conduit-ctl.sh status
 ```

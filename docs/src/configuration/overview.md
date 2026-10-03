@@ -10,7 +10,7 @@ CONDUIT_CONFIG=/etc/conduit/conduit.toml ./target/release/conduit-proxy
 
 ```toml
 listen_addr = "0.0.0.0:8888"
-dragonfly_url = "redis://127.0.0.1:6380"
+dragonfly_url = "redis://127.0.0.1:6379"
 ```
 
 Everything else has sensible defaults. See `conduit.example.toml` for a complete annotated example.
@@ -39,7 +39,7 @@ Everything else has sensible defaults. See `conduit.example.toml` for a complete
 ```toml
 listen_addr = "0.0.0.0:8888"       # Proxy listener
 api_addr = "0.0.0.0:8443"          # Management API
-dragonfly_url = "redis://127.0.0.1:6380"
+dragonfly_url = "redis://127.0.0.1:6379"
 
 # TLS interception (MITM)
 tls_intercept = true                # false = passthrough mode

@@ -1,7 +1,8 @@
 [Unit]
 Description=Conduit Security Gateway
+Documentation=https://github.com/the2dl/conduit
 Wants=conduit-api.service conduit-proxy.service
 After=conduit-api.service conduit-proxy.service
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

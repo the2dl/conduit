@@ -7,8 +7,13 @@ listen_addr = "0.0.0.0:8888"
 # Management API address
 api_addr = "0.0.0.0:8443"
 
-# Dragonfly (Redis-compatible) connection URL
-dragonfly_url = "redis://127.0.0.1:6380"
+# Datastore connection URL (Valkey, Redis, or Dragonfly)
+# Valkey/Redis natively listen on standard port 6379. (Dockerized Dragonfly default was 6380).
+# Keys 'valkey_url', 'redis_url', and 'dragonfly_url' are all supported.
+dragonfly_url = "redis://127.0.0.1:6379"
+
+# Path to the SvelteKit UI build directory (optional, enables management dashboard)
+# ui_dir = "./conduit-ui/build" # or "/var/lib/conduit/ui" for system service installs
 
 # CA certificate and key paths (auto-generated if absent)
 # ca_cert_path = "/etc/conduit/ca.pem"

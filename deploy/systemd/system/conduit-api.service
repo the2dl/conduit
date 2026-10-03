@@ -1,0 +1,30 @@
+[Unit]
+Description=Conduit Security Gateway Management API & UI
+Documentation=https://github.com/the2dl/conduit
+After=network.target valkey.service valkey-server.service redis.service redis-server.service
+Wants=valkey.service
+
+[Service]
+Type=simple
+User=conduit
+Group=conduit
+WorkingDirectory=/var/lib/conduit
+UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+Environment=CONDUIT_CONFIG=/etc/conduit/conduit.toml
+Environment=RUST_LOG=info
+ExecStartPre=/usr/bin/bash -c 'for i in {1..50}; do (echo > /dev/tcp/127.0.0.1/6379 || nc -z 127.0.0.1 6379) 2>/dev/null && exit 0; sleep 0.2; done; exit 1'
+ExecStart=/usr/local/bin/conduit-api
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/conduit /var/log/conduit /etc/conduit
+
+[Install]
+WantedBy=multi-user.target

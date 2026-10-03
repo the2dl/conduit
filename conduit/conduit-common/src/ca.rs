@@ -36,6 +36,12 @@ impl CertAuthority {
         } else {
             info!("Generating new CA certificate");
             let ca = Self::generate()?;
+            if let Some(parent) = cert_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Some(parent) = key_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             std::fs::write(cert_path, &ca.cert_pem)?;
             // Write private key with restrictive permissions (0600)
             {
