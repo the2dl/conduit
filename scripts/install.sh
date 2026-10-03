@@ -99,6 +99,20 @@ fi
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(eval echo "~$REAL_USER")"
 
+# If invoked via sudo, ensure source repository files belong to the invoking user
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  chown -R "$REAL_USER:$REAL_USER" "$ROOT_DIR"
+fi
+
+# Helper to run build commands as the normal user (not root) with clean rustc environment
+run_build() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    sudo -u "$REAL_USER" env "HOME=$REAL_HOME" "PATH=$PATH" "RUSTC_WRAPPER=" "$@"
+  else
+    env "RUSTC_WRAPPER=" "$@"
+  fi
+}
+
 echo "=========================================================="
 echo "       Conduit Security Gateway — Native Installer        "
 echo "=========================================================="
@@ -282,10 +296,10 @@ if [ "$SKIP_BUILD" = false ]; then
     cd "$ROOT_DIR/conduit-ui"
     if [ ! -d "node_modules" ]; then
       echo "  Running npm install..."
-      npm install --silent
+      run_build npm install --silent
     fi
     echo "  Compiling SvelteKit dashboard..."
-    npm run build
+    run_build npm run build
   )
   echo "  UI build complete."
 
@@ -293,7 +307,7 @@ if [ "$SKIP_BUILD" = false ]; then
   echo "--- 6. Compiling Rust Binaries (conduit-api, conduit-proxy) ---"
   (
     cd "$ROOT_DIR"
-    cargo build --release --bin conduit-api --bin conduit-proxy
+    run_build cargo build --config 'build.rustc-wrapper=""' --release --bin conduit-api --bin conduit-proxy
   )
   echo "  Release binaries compiled successfully."
 else
