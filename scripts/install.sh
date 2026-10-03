@@ -30,6 +30,7 @@ INSTALL_MODE="auto" # 'system' or 'user'
 TRUST_CA=false
 SYSTEM_PROXY=false
 ENABLE_FIREWALL=false
+ENABLE_OMARCHY=false
 SKIP_BUILD=false
 SKIP_DEPS=false
 SKIP_SEED=false
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --trust-ca) TRUST_CA=true; shift ;;
     --system-proxy) SYSTEM_PROXY=true; shift ;;
     --firewall|--lockdown) ENABLE_FIREWALL=true; shift ;;
+    --omarchy) ENABLE_OMARCHY=true; shift ;;
     --skip-build) SKIP_BUILD=true; shift ;;
     --skip-deps) SKIP_DEPS=true; shift ;;
     --skip-seed) SKIP_SEED=true; shift ;;
@@ -60,6 +62,7 @@ Options:
   --trust-ca       Install Conduit root CA into OS certificate trust store (requires sudo)
   --system-proxy   Install /etc/profile.d/conduit.sh to route shell traffic (requires sudo)
   --firewall       Lock down host egress firewall to enforce proxying (requires sudo)
+  --omarchy        Install and enable the Conduit desktop bar widget plugin for Omarchy
   --skip-build     Skip compiling release binaries and UI
   --skip-deps      Skip package manager dependency installation
   --skip-seed      Skip threat feeds and category dataset seeding
@@ -514,7 +517,41 @@ if [ "$ENABLE_FIREWALL" = true ]; then
   $SUDO "$ROOT_DIR/scripts/setup-firewall.sh" --enable "$TARGET_PROXY_USER"
 fi
 
-# ── 13. Summary ───────────────────────────────────────────────────────
+# ── 13. Omarchy Desktop Plugin ────────────────────────────────────────
+if [ "$ENABLE_OMARCHY" = true ]; then
+  echo ""
+  echo "--- 13. Installing Omarchy Desktop Plugin ---"
+  OMARCHY_DIR="$REAL_HOME/.config/omarchy"
+  PLUGIN_SRC="$ROOT_DIR/deploy/omarchy/io.github.the2dl.conduit"
+  PLUGIN_DEST="$OMARCHY_DIR/plugins/io.github.the2dl.conduit"
+
+  if [ ! -d "$PLUGIN_SRC" ]; then
+    echo "  Warning: Omarchy plugin source not found at $PLUGIN_SRC"
+  else
+    echo "  Installing plugin to $PLUGIN_DEST..."
+    mkdir -p "$OMARCHY_DIR/plugins"
+    rm -rf "$PLUGIN_DEST"
+    cp -r "$PLUGIN_SRC" "$PLUGIN_DEST"
+    chmod +x "$PLUGIN_DEST/poll.sh"
+
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      chown -R "$REAL_USER:$REAL_USER" "$PLUGIN_DEST"
+    fi
+
+    if command -v omarchy >/dev/null 2>&1; then
+      echo "  Enabling Conduit plugin on Omarchy bar..."
+      run_build omarchy plugin enable io.github.the2dl.conduit right 2>/dev/null || true
+      if command -v omarchy-shell >/dev/null 2>&1; then
+        run_build omarchy-shell shell rescanPlugins 2>/dev/null || true
+      fi
+      echo "  Omarchy plugin enabled on status bar."
+    else
+      echo "  Plugin installed to $PLUGIN_DEST."
+    fi
+  fi
+fi
+
+# ── 14. Summary ───────────────────────────────────────────────────────
 echo ""
 echo "=========================================================="
 echo "          Conduit Installation Complete!                  "
@@ -524,6 +561,9 @@ echo "  Management UI:    http://localhost:8443"
 echo "  HTTP/HTTPS Proxy: http://127.0.0.1:8888"
 echo "  Datastore:        Valkey on 127.0.0.1:6379"
 echo "  Prometheus Stats: http://localhost:9091"
+if [ "$ENABLE_OMARCHY" = true ]; then
+  echo "  Omarchy Widget:   Enabled (bar -> right)"
+fi
 echo ""
 echo "  Useful Commands:"
 if [ "$INSTALL_MODE" = "system" ]; then
@@ -534,6 +574,9 @@ else
   echo "    ./scripts/conduit-ctl.sh status Check status of all components"
   echo "    systemctl --user restart conduit.target Restart Conduit"
   echo "    tail -f logs/proxy.log          View proxy logs"
+fi
+if [ "$ENABLE_OMARCHY" = false ] && [ -d "$REAL_HOME/.config/omarchy" ]; then
+  echo "    omarchy plugin enable io.github.the2dl.conduit (or re-run with --omarchy)"
 fi
 echo "    source ./scripts/env.sh         Enable proxy in current shell"
 echo "    source ./scripts/unenv.sh       Disable proxy in current shell"

@@ -260,7 +260,7 @@ Panel {
         try {
           var payload = JSON.parse(text)
           root.running = (payload.health && payload.health.status === "healthy")
-          root.dragonflyConnected = Boolean(payload.health && payload.health.dragonfly)
+          root.dragonflyConnected = Boolean(payload.health && (payload.health.valkey || payload.health.dragonfly))
 
           if (payload.config) {
             if (payload.config.tls_intercept !== undefined) {
@@ -737,7 +737,7 @@ Panel {
               }
 
               Text {
-                text: "Dragonfly: " + (root.dragonflyConnected ? "Connected" : "Disconnected")
+                text: "Datastore: " + (root.dragonflyConnected ? "Connected" : "Disconnected")
                 color: root.dragonflyConnected ? root.muted : root.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption

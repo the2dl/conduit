@@ -31,6 +31,7 @@ Installs as a user-level systemd service (`~/.config/systemd/user`) in your curr
 | `--trust-ca` | Install and trust Conduit root CA into OS certificate store |
 | `--system-proxy` | Configure `/etc/profile.d/conduit.sh` to route all shells through Conduit |
 | `--firewall` | Lock down host egress firewall (nftables/iptables) to prevent proxy bypass |
+| `--omarchy` | Install and enable Conduit desktop status bar widget plugin for Omarchy |
 | `--skip-build` | Skip building release binaries and UI (if already built) |
 | `--skip-deps` | Skip package manager dependency installation |
 | `--skip-seed` | Skip initial threat feeds and category database seeding |
