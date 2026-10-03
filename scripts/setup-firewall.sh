@@ -9,7 +9,13 @@
 set -euo pipefail
 
 ACTION="${1:---enable}"
-PROXY_USER="${2:-${SUDO_USER:-$USER}}"
+if [ -n "${2:-}" ]; then
+  PROXY_USER="$2"
+elif id conduit >/dev/null 2>&1 && (systemctl is-active conduit-proxy >/dev/null 2>&1 || [ -f "/etc/systemd/system/conduit-proxy.service" ]); then
+  PROXY_USER="conduit"
+else
+  PROXY_USER="${SUDO_USER:-$USER}"
+fi
 
 if [ "$EUID" -ne 0 ]; then
   echo "Error: Firewall configuration requires root privileges. Please run with sudo." >&2
