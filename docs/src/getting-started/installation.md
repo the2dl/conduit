@@ -4,17 +4,27 @@
 
 Conduit includes a turnkey installer script (`scripts/install.sh`) that detects your Linux distribution (**Arch Linux**, **Debian/Ubuntu**, **Fedora/RHEL**), installs native dependencies and the **Valkey** datastore, compiles the SvelteKit UI and release binaries, and sets up systemd services.
 
-### System Service Installation (Production)
+### One-Command Turnkey Profiles
 
-Installs binaries to `/usr/local/bin`, configuration to `/etc/conduit/conduit.toml`, SvelteKit UI to `/var/lib/conduit/ui`, and enables hardened systemd system services under an unprivileged `conduit` user:
+#### 1. Standard Linux (Production)
+Installs Conduit as a production system daemon under `/usr/local/bin` and `/etc/conduit` (unprivileged `conduit` user), starts native Valkey, trusts the Root CA, routes shell traffic via `/etc/profile.d/conduit.sh`, and applies egress firewall lockdown:
 
 ```sh
 git clone https://github.com/the2dl/conduit.git
 cd conduit
-sudo ./scripts/install.sh --system --trust-ca --system-proxy
+sudo ./scripts/install.sh --all
 ```
 
-### User Service Installation (Local / Desktop)
+#### 2. Omarchy Linux
+Installs everything in `--all` plus the native Omarchy desktop status bar widget:
+
+```sh
+git clone https://github.com/the2dl/conduit.git
+cd conduit
+sudo ./scripts/install.sh --all-omarchy
+```
+
+#### 3. User Service Installation (Local / Desktop)
 
 Installs as a user-level systemd service (`~/.config/systemd/user`) in your current environment:
 
@@ -26,6 +36,8 @@ Installs as a user-level systemd service (`~/.config/systemd/user`) in your curr
 
 | Flag | Description |
 |---|---|
+| `--all` | Full install: system daemon, Valkey, UI, CA trust, system proxy, & firewall lockdown |
+| `--all-omarchy` | Full install + Omarchy desktop bar widget plugin |
 | `--system` | Install system-wide daemons and config under `/etc/conduit` (requires sudo) |
 | `--user` | Install systemd user services under `~/.config/systemd/user` |
 | `--trust-ca` | Install and trust Conduit root CA into OS certificate store |

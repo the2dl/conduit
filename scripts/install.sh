@@ -39,6 +39,21 @@ NON_INTERACTIVE=false
 # ── Argument Parsing ───────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --all)
+      INSTALL_MODE="system"
+      TRUST_CA=true
+      SYSTEM_PROXY=true
+      ENABLE_FIREWALL=true
+      shift
+      ;;
+    --all-omarchy)
+      INSTALL_MODE="system"
+      TRUST_CA=true
+      SYSTEM_PROXY=true
+      ENABLE_FIREWALL=true
+      ENABLE_OMARCHY=true
+      shift
+      ;;
     --system) INSTALL_MODE="system"; shift ;;
     --user) INSTALL_MODE="user"; shift ;;
     --trust-ca) TRUST_CA=true; shift ;;
@@ -56,12 +71,16 @@ Conduit Security Gateway — Native Linux Installer
 Usage:
   ./scripts/install.sh [OPTIONS]
 
-Options:
+Turnkey Profiles:
+  --all            Full install: system daemon, Valkey, UI, CA trust, system proxy, & firewall lockdown
+  --all-omarchy    Full install + Omarchy desktop bar widget plugin
+
+Modular Options:
   --system         Install as system-wide daemon in /usr/local/bin & /etc/conduit (requires sudo)
   --user           Install as user-level service in ~/.config/systemd/user (default for non-root)
   --trust-ca       Install Conduit root CA into OS certificate trust store (requires sudo)
   --system-proxy   Install /etc/profile.d/conduit.sh to route shell traffic (requires sudo)
-  --firewall       Lock down host egress firewall to enforce proxying (requires sudo)
+  --firewall       Lock down host egress firewall (nftables/iptables) to enforce proxying (requires sudo)
   --omarchy        Install and enable the Conduit desktop bar widget plugin for Omarchy
   --skip-build     Skip compiling release binaries and UI
   --skip-deps      Skip package manager dependency installation
