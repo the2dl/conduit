@@ -23,6 +23,11 @@ dragonfly_url = "redis://127.0.0.1:6379"
 # Set to false for passthrough mode (only logs CONNECT host:port)
 tls_intercept = true
 
+# MITM intercept bare IP address destinations (e.g. 34.136.148.92:443)
+# Default: false (passes bare IPs through without TLS interception to avoid breaking
+# Kubernetes cluster control planes, cloud APIs, and pinned-cert infrastructure)
+# tls_intercept_bare_ips = false
+
 # Reject unauthenticated traffic with 407
 auth_required = true
 
@@ -160,6 +165,7 @@ fail_closed = true
 #     "127.0.0.1",
 #     "::1",
 #     "mtalk.google.com",                  # Google FCM push notifications on port 5228-5230
+#     "accounts.google.com",               # Google OAuth/auth (bypass MITM to avoid cert-pinning issues)
 #     "localhost:8443",                    # Explicit host:port overrides default port blocks
 #     "*.internal.corp",
 # ]

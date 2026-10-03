@@ -528,8 +528,8 @@ export https_proxy="http://127.0.0.1:8888"
 export HTTP_PROXY="http://127.0.0.1:8888"
 export HTTPS_PROXY="http://127.0.0.1:8888"
 export ALL_PROXY="http://127.0.0.1:8888"
-export NO_PROXY="localhost,127.0.0.1,::1,.local,.internal"
-export no_proxy="localhost,127.0.0.1,::1,.local,.internal"
+export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+export no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
 EOF
   $SUDO chmod 644 /etc/profile.d/conduit.sh
   echo "  /etc/profile.d/conduit.sh installed."

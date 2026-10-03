@@ -69,8 +69,12 @@ table inet conduit_lockdown {
         ct state established,related accept
 
         # Essential direct services
-        udp dport { 53, 123, 41641 } accept
+        udp dport { 53, 123, 41641, 51820 } accept
         tcp dport { 22, 53, 6443 } accept
+
+        # Allow direct LAN and private RFC 1918 traffic (exempt from proxying)
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept
+        ip6 daddr { fc00::/7, fe80::/10 } accept
 
         # Allow Conduit proxy process (UID $PROXY_UID) direct outbound web access
         skuid $PROXY_UID tcp dport { 80, 443 } accept
@@ -88,8 +92,9 @@ EOF
     # Insert rules at the top of OUTPUT
     iptables -I OUTPUT 1 -p tcp -m multiport --dports 80,443 -j REJECT --reject-with icmp-port-unreachable
     iptables -I OUTPUT 1 -m owner --uid-owner "$PROXY_UID" -p tcp -m multiport --dports 80,443 -j ACCEPT
+    iptables -I OUTPUT 1 -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16 -j ACCEPT
     iptables -I OUTPUT 1 -p tcp -m multiport --dports 22,53,6443 -j ACCEPT
-    iptables -I OUTPUT 1 -p udp -m multiport --dports 53,123,41641 -j ACCEPT
+    iptables -I OUTPUT 1 -p udp -m multiport --dports 53,123,41641,51820 -j ACCEPT
     iptables -I OUTPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -I OUTPUT 1 -o lo -j ACCEPT
     echo "iptables egress lockdown applied successfully."

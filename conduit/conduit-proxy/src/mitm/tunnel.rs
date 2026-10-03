@@ -60,8 +60,11 @@ pub async fn handle_connect_tunnel(
         .as_ref()
         .map(|a| a.is_allowed(&host, port, None, Some(&client_ip)))
         .unwrap_or(false);
+    let is_bare_ip = host.parse::<std::net::IpAddr>().is_ok();
+    let should_intercept =
+        tls_intercept && !is_allowlisted && (!is_bare_ip || config.tls_intercept_bare_ips);
 
-    if tls_intercept && !is_allowlisted {
+    if should_intercept {
         // MITM: TLS accept on client side, then route through Pingora pipeline
         handle_mitm(
             downstream,

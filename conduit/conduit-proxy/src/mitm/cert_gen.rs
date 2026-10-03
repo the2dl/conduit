@@ -59,9 +59,13 @@ pub fn generate_cert(domain: &str, ca: &CertAuthority) -> anyhow::Result<Generat
         .keyid(false)
         .issuer(false)
         .build(&builder.x509v3_context(Some(&ca.cert), None))?;
-    let san = SubjectAlternativeName::new()
-        .dns(domain)
-        .build(&builder.x509v3_context(Some(&ca.cert), None))?;
+    let mut san_builder = SubjectAlternativeName::new();
+    if domain.parse::<std::net::IpAddr>().is_ok() {
+        san_builder.ip(domain);
+    } else {
+        san_builder.dns(domain);
+    }
+    let san = san_builder.build(&builder.x509v3_context(Some(&ca.cert), None))?;
 
     builder.append_extension(&basic_constraints)?;
     builder.append_extension(&extended_key_usage)?;
@@ -101,5 +105,12 @@ mod tests {
         // not_after should be in the future (~30 days)
         let diff_after = now_asn1.diff(gen.cert.not_after()).unwrap();
         assert!(diff_after.days >= 28);
+    }
+
+    #[test]
+    fn test_generate_cert_ip_san() {
+        let ca = CertAuthority::generate().unwrap();
+        let gen = generate_cert("34.136.148.92", &ca).unwrap();
+        assert_eq!(gen.cert.subject_name().entries().next().unwrap().data().as_slice(), b"34.136.148.92");
     }
 }

@@ -41,6 +41,11 @@ pub struct ClearGateConfig {
     /// When false, CONNECT tunnels pass through encrypted bytes without inspection.
     #[serde(default = "default_true")]
     pub tls_intercept: bool,
+    /// When true, bare IP address destinations (e.g. 34.136.148.92:443) are also MITM intercepted.
+    /// When false (default), bare IP destinations pass through without TLS interception
+    /// to avoid breaking Kubernetes clusters, cloud APIs, and pinned-cert infrastructure.
+    #[serde(default)]
+    pub tls_intercept_bare_ips: bool,
     /// API key for management API authentication.
     /// When set, all non-health API requests require `Authorization: Bearer <key>` or `X-API-Key: <key>`.
     #[serde(default)]
@@ -327,6 +332,7 @@ impl Default for ClearGateConfig {
             workers: default_workers(),
             ui_dir: None,
             tls_intercept: true,
+            tls_intercept_bare_ips: false,
             api_key: None,
             fail_closed: true,
             node: None,

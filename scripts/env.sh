@@ -9,8 +9,8 @@ export https_proxy="http://192.168.44.72:8888"
 export HTTP_PROXY="http://192.168.44.72:8888"
 export HTTPS_PROXY="http://192.168.44.72:8888"
 export ALL_PROXY="http://192.168.44.72:8888"
-export no_proxy="localhost,127.0.0.1,::1"
-export NO_PROXY="localhost,127.0.0.1,::1"
+export no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
 
 # CA Bundle for curl, python requests/urllib, Node.js, git, and OpenSSL
 export CURL_CA_BUNDLE="${DIR}/ca/ca.pem"
