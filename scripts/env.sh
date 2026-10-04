@@ -18,6 +18,7 @@ export SSL_CERT_FILE="${DIR}/ca/ca.pem"
 export REQUESTS_CA_BUNDLE="${DIR}/ca/ca.pem"
 export NODE_EXTRA_CA_CERTS="${DIR}/ca/ca.pem"
 export GIT_SSL_CAINFO="${DIR}/ca/ca.pem"
+export CODEX_CA_CERTIFICATE="${DIR}/ca/ca.pem"
 
 if [[ $- == *i* ]]; then
     echo "Conduit proxy environment enabled (127.0.0.1:8888)."
