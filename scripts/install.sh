@@ -277,37 +277,50 @@ echo "  Rustc version: $(rustc --version)"
 echo ""
 echo "--- 4. Configuring Valkey Datastore ---"
 
-DATASTORE_SVC=""
-for svc in valkey valkey-server redis redis-server; do
-  if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "$svc.service"; then
-    DATASTORE_SVC="$svc"
-    break
-  fi
-done
-
-if [ -n "$DATASTORE_SVC" ]; then
-  echo "  Enabling and starting $DATASTORE_SVC.service..."
-  $SUDO systemctl enable --now "$DATASTORE_SVC.service"
-else
-  echo "  Warning: No native valkey/redis systemd service unit found. Checking port 6379..."
-fi
-
-# Verify port 6379 connectivity
-echo -n "  Verifying datastore response on :6379..."
 PORT_OK=false
-for i in {1..30}; do
-  if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
-    PORT_OK=true
-    break
-  elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
-    PORT_OK=true
-    break
-  elif (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
-    PORT_OK=true
-    break
+if (command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG) || \
+   (command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG) || \
+   (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+  echo "  Active datastore already running on 127.0.0.1:6379 (ready)."
+  PORT_OK=true
+  for svc in valkey valkey-server redis redis-server; do
+    if systemctl is-failed "$svc.service" 2>/dev/null | grep -q failed; then
+      $SUDO systemctl disable --now "$svc.service" 2>/dev/null || true
+      $SUDO systemctl reset-failed "$svc.service" 2>/dev/null || true
+    fi
+  done
+else
+  DATASTORE_SVC=""
+  for svc in valkey valkey-server redis redis-server; do
+    if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "$svc.service"; then
+      DATASTORE_SVC="$svc"
+      break
+    fi
+  done
+
+  if [ -n "$DATASTORE_SVC" ]; then
+    echo "  Enabling and starting $DATASTORE_SVC.service..."
+    $SUDO systemctl enable --now "$DATASTORE_SVC.service" 2>/dev/null || true
+  else
+    echo "  Warning: No native valkey/redis systemd service unit found. Checking port 6379..."
   fi
-  sleep 0.5
-done
+
+  # Verify port 6379 connectivity
+  echo -n "  Verifying datastore response on :6379..."
+  for i in {1..30}; do
+    if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+      PORT_OK=true
+      break
+    elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+      PORT_OK=true
+      break
+    elif (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+      PORT_OK=true
+      break
+    fi
+    sleep 0.5
+  done
+fi
 
 if [ "$PORT_OK" = true ]; then
   echo " online."
