@@ -47,10 +47,17 @@ else
   systemctl --user disable conduit.target conduit-proxy.service conduit-api.service 2>/dev/null || true
 fi
 
-# 3. Remove System Shell Proxy Profile
+# 3. Remove System and User Shell Proxy Profiles
 echo ""
 echo "--- 3. Removing Shell Proxy Profiles ---"
 rm -f /etc/profile.d/conduit.sh
+
+for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc" "$REAL_HOME/.bash_profile" "$REAL_HOME/.profile"; do
+  if [ -f "$rc" ]; then
+    sed -i '/# Conduit MITM security gateway proxy defaults/d' "$rc" 2>/dev/null || true
+    sed -i '/conduit\/scripts\/env\.sh/d' "$rc" 2>/dev/null || true
+  fi
+done
 
 # 4. Remove User Environment Defaults & Chrome Flags
 echo ""
