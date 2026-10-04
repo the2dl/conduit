@@ -173,6 +173,12 @@ hosts = [
     "127.0.0.1",
     "::1",
     "mtalk.google.com",
+    "34.136.148.92",
+    "34.139.173.121",
+    "35.190.142.72",
+]
+ports = [
+    6443,
 ]
 
 # --- Outbound Egress Port Restrictions ---

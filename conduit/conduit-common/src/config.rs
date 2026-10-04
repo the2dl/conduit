@@ -41,10 +41,11 @@ pub struct ClearGateConfig {
     /// When false, CONNECT tunnels pass through encrypted bytes without inspection.
     #[serde(default = "default_true")]
     pub tls_intercept: bool,
-    /// When true, bare IP address destinations (e.g. 34.136.148.92:443) are also MITM intercepted.
-    /// When false (default), bare IP destinations pass through without TLS interception
-    /// to avoid breaking Kubernetes clusters, cloud APIs, and pinned-cert infrastructure.
-    #[serde(default)]
+    /// When true (default), bare IP address destinations (e.g. 198.51.100.23:443) are also MITM intercepted.
+    /// When false, bare IP destinations pass through without TLS interception.
+    /// Pinned infrastructure (e.g. Kubernetes cluster API servers) should be allowlisted
+    /// specifically in `allowlist.hosts` rather than turning off IP inspection globally.
+    #[serde(default = "default_true")]
     pub tls_intercept_bare_ips: bool,
     /// API key for management API authentication.
     /// When set, all non-health API requests require `Authorization: Bearer <key>` or `X-API-Key: <key>`.
@@ -332,7 +333,7 @@ impl Default for ClearGateConfig {
             workers: default_workers(),
             ui_dir: None,
             tls_intercept: true,
-            tls_intercept_bare_ips: false,
+            tls_intercept_bare_ips: true,
             api_key: None,
             fail_closed: true,
             node: None,
@@ -804,6 +805,9 @@ pub struct AllowlistConfig {
     /// Hostnames, domain patterns (*.example.com or .example.com), bare IPs, or CIDR notations.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// Destination ports permitted to bypass SSRF blocking and TLS interception (e.g. 6443 for Kubernetes API servers).
+    #[serde(default)]
+    pub ports: Vec<u16>,
     /// When true (default), permits loopback traffic (127.0.0.0/8, ::1, localhost)
     /// to bypass SSRF blocking for unprivileged ports (>= min_loopback_port).
     #[serde(default = "default_true")]
@@ -843,6 +847,7 @@ impl Default for AllowlistConfig {
     fn default() -> Self {
         Self {
             hosts: Vec::new(),
+            ports: Vec::new(),
             allow_loopback: true,
             min_loopback_port: default_min_loopback_port(),
             blocked_loopback_ports: default_blocked_loopback_ports(),
@@ -1041,6 +1046,11 @@ impl AllowlistConfig {
             return true;
         }
 
+        // 3. Port check for non-loopback targets (e.g. Kubernetes 6443)
+        if !is_loopback_target && self.ports.contains(&effective_port) {
+            return true;
+        }
+
         false
     }
 }
@@ -1125,6 +1135,20 @@ mod tests {
         assert!(allowlist.is_allowed("host", 80, Some("10.50.0.1".parse().unwrap()), None));
         assert!(allowlist.is_allowed("192.168.1.100:9000", 9000, None, None));
         assert!(!allowlist.is_allowed("192.168.1.101", 80, None, None));
+    }
+
+    #[test]
+    fn test_allowlist_ports() {
+        let allowlist = AllowlistConfig {
+            ports: vec![6443],
+            allow_loopback: false,
+            ..AllowlistConfig::default()
+        };
+        assert!(allowlist.is_allowed("212.2.245.198", 6443, None, None));
+        assert!(allowlist.is_allowed("k8s.example.com", 6443, None, None));
+        assert!(!allowlist.is_allowed("212.2.245.198", 443, None, None));
+        assert!(!allowlist.is_allowed("k8s.example.com", 443, None, None));
+        assert!(!allowlist.is_allowed("127.0.0.1", 6443, None, Some("127.0.0.1")));
     }
 
     #[test]
