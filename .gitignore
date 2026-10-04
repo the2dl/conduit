@@ -32,3 +32,4 @@ domains_categorized.csv
 top-1m.csv
 /logs/
 /ca/
+*.rdb
