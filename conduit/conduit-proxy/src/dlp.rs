@@ -255,7 +255,15 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
         (
             "db_credentials",
             r"(?i)(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]*:[^@\s/]+@[^\s/]+",
-            &[],
+            &[
+                "*.anthropic.com",
+                "*.claude.ai",
+                "*.openai.com",
+                "*.chatgpt.com",
+                "*.oaistatic.com",
+                "*.oaiusercontent.com",
+                "*.googleapis.com",
+            ],
         ),
         (
             "env_secret_export",

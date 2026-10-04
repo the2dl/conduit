@@ -136,6 +136,10 @@ fail_closed = true
 #     "*.pkg.dev",
 #     "*.docker.pkg.dev",
 #     "us-central1-docker.pkg.dev",
+#     "*.anthropic.com",
+#     "*.claude.ai",
+#     "*.openai.com",
+#     "*.chatgpt.com",
 # ]
 # [[dlp.custom_patterns]]
 # name = "internal_id"
@@ -169,6 +173,10 @@ fail_closed = true
 #     "10.0.0.0/8",                       # Internal private cluster CIDR
 #     "mtalk.google.com",                  # Google FCM push notifications on port 5228-5230
 #     "accounts.google.com",               # Google OAuth/auth (bypass MITM to avoid cert-pinning issues)
+#     "*.anthropic.com",                  # Claude / Anthropic API & subagents
+#     "*.claude.ai",
+#     "*.openai.com",                     # OpenAI / ChatGPT / Codex
+#     "*.chatgpt.com",
 #     "localhost:8443",                    # Explicit host:port overrides default port blocks
 #     "*.internal.corp",
 # ]

@@ -404,6 +404,13 @@ if [ "$INSTALL_MODE" = "system" ]; then
     fi
   else
     echo "  Preserving existing /etc/conduit/conduit.toml."
+    if ! grep -q "anthropic.com" /etc/conduit/conduit.toml 2>/dev/null && [ -f "$ROOT_DIR/conduit.toml" ]; then
+      echo "  Syncing AI assistant allowlist domains into /etc/conduit/conduit.toml..."
+      $SUDO cp "$ROOT_DIR/conduit.toml" /etc/conduit/conduit.toml
+      $SUDO sed -i 's|^#\? \?ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
+      $SUDO sed -i 's|^#\? \?ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
+      $SUDO sed -i 's|^#\? \?ui_dir = .*|ui_dir = "/var/lib/conduit/ui"|' /etc/conduit/conduit.toml
+    fi
   fi
 
   # Ensure CA directory exists and seed existing Root CA if present

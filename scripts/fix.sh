@@ -182,9 +182,23 @@ fi
 # Ensure directories exist
 mkdir -p /etc/conduit/ca /var/lib/conduit/ui /var/log/conduit
 
-# Ensure conduit.toml exists
+# Ensure conduit.toml exists and has AI assistant allowlist domains
 if [ -f "/etc/conduit/conduit.toml" ]; then
-  log_ok "Config /etc/conduit/conduit.toml is present"
+  if ! grep -q "anthropic.com" "/etc/conduit/conduit.toml"; then
+    SRC_CFG="$ROOT_DIR/conduit.toml"
+    if [ -f "$SRC_CFG" ] && grep -q "anthropic.com" "$SRC_CFG"; then
+      cp "$SRC_CFG" /etc/conduit/conduit.toml
+      sed -i 's|^#\? \?ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
+      sed -i 's|^#\? \?ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
+      sed -i 's|^#\? \?ui_dir = .*|ui_dir = "/var/lib/conduit/ui"|' /etc/conduit/conduit.toml
+      systemctl restart conduit-proxy 2>/dev/null || true
+      log_fixed "Updated /etc/conduit/conduit.toml with AI assistant allowlist domains (Claude, ChatGPT, Codex)"
+    else
+      log_ok "Config /etc/conduit/conduit.toml is present"
+    fi
+  else
+    log_ok "Config /etc/conduit/conduit.toml is present (AI domains allowlisted)"
+  fi
 else
   SRC_CFG="$ROOT_DIR/conduit.toml"
   [ ! -f "$SRC_CFG" ] && SRC_CFG="$ROOT_DIR/conduit.example.toml"

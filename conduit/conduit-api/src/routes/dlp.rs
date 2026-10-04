@@ -379,7 +379,15 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
-            allowed_domains: vec![],
+            allowed_domains: vec![
+                "*.anthropic.com".into(),
+                "*.claude.ai".into(),
+                "*.openai.com".into(),
+                "*.chatgpt.com".into(),
+                "*.oaistatic.com".into(),
+                "*.oaiusercontent.com".into(),
+                "*.googleapis.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-env-secret-export".into(),
