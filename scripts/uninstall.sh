@@ -100,10 +100,25 @@ else
   bash -c "$CLEAN_ENV_CMD" 2>/dev/null || true
 fi
 
-# 6. CA Certificate Trust Removal (if --purge or full reset)
+# 6. Docker & Containerd Daemon Proxy Teardown
+if [ -f /etc/systemd/system/docker.service.d/http-proxy.conf ] || [ -f /etc/systemd/system/containerd.service.d/http-proxy.conf ]; then
+  echo ""
+  echo "--- 6. Removing Docker & Containerd Proxy Drop-Ins ---"
+  rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
+  rm -f /etc/systemd/system/containerd.service.d/http-proxy.conf
+  rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
+  rmdir /etc/systemd/system/containerd.service.d 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+  if systemctl is-active docker >/dev/null 2>&1; then
+    echo "  Restarting docker service to clear proxy..."
+    systemctl restart docker 2>/dev/null || true
+  fi
+fi
+
+# 7. CA Certificate Trust Removal (if --purge or full reset)
 if [ "$MODE" = "--purge" ] || [ "$MODE" = "purge" ]; then
   echo ""
-  echo "--- 6. Removing Root CA from Trust Stores ---"
+  echo "--- 7. Removing Root CA from Trust Stores ---"
   rm -f /etc/ca-certificates/trust-source/anchors/conduit-ca.crt \
         /usr/local/share/ca-certificates/conduit-ca.crt \
         /etc/pki/ca-trust/source/anchors/conduit-ca.crt
@@ -126,7 +141,7 @@ if [ "$MODE" = "--purge" ] || [ "$MODE" = "purge" ]; then
   echo "  Root CA removed from OS and NSS trust stores."
 
   echo ""
-  echo "--- 7. Purging Binaries & Configurations ---"
+  echo "--- 8. Purging Binaries & Configurations ---"
   rm -f /usr/local/bin/conduit-proxy /usr/local/bin/conduit-api /usr/local/bin/conduit-ctl
   rm -f /etc/systemd/system/conduit*
   systemctl daemon-reload 2>/dev/null || true

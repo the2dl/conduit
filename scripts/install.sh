@@ -620,6 +620,47 @@ EOF
   fi
   echo "  User desktop session environment configured."
 
+  # Configure Docker daemon proxy (systemd drop-in) if Docker or containerd is installed
+  if command -v docker >/dev/null 2>&1 || [ -d /etc/docker ] || systemctl list-unit-files docker.service >/dev/null 2>&1; then
+    echo "  Configuring Docker daemon proxy..."
+    $SUDO mkdir -p /etc/systemd/system/docker.service.d
+    cat << 'EOF' | $SUDO tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+[Service]
+Environment="HTTP_PROXY=http://127.0.0.1:8888"
+Environment="HTTPS_PROXY=http://127.0.0.1:8888"
+Environment="http_proxy=http://127.0.0.1:8888"
+Environment="https_proxy=http://127.0.0.1:8888"
+Environment="NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+Environment="no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+EOF
+    $SUDO chmod 644 /etc/systemd/system/docker.service.d/http-proxy.conf
+
+    if systemctl list-unit-files containerd.service >/dev/null 2>&1 || command -v containerd >/dev/null 2>&1; then
+      $SUDO mkdir -p /etc/systemd/system/containerd.service.d
+      cat << 'EOF' | $SUDO tee /etc/systemd/system/containerd.service.d/http-proxy.conf >/dev/null
+[Service]
+Environment="HTTP_PROXY=http://127.0.0.1:8888"
+Environment="HTTPS_PROXY=http://127.0.0.1:8888"
+Environment="http_proxy=http://127.0.0.1:8888"
+Environment="https_proxy=http://127.0.0.1:8888"
+Environment="NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+Environment="no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+EOF
+      $SUDO chmod 644 /etc/systemd/system/containerd.service.d/http-proxy.conf
+    fi
+
+    $SUDO systemctl daemon-reload
+    if systemctl is-active docker >/dev/null 2>&1; then
+      echo "  Restarting docker service to apply proxy configuration..."
+      $SUDO systemctl restart docker 2>/dev/null || true
+    fi
+    echo "  Docker daemon proxy configured (/etc/systemd/system/docker.service.d/http-proxy.conf)."
+  fi
+else
+  echo "  To route your current shell: source ./scripts/env.sh"
+  echo "  To install system-wide across all shells and daemons: sudo $0 --system-proxy"
+fi
+
 # ── 12. Host Egress Firewall Lockdown ─────────────────────────────────
 if [ "$ENABLE_FIREWALL" = true ]; then
   echo ""
