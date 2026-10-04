@@ -80,7 +80,9 @@ CLEAN_ENV_CMD='
   fi
 '
 if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-  sudo -u "$REAL_USER" bash -c "$CLEAN_ENV_CMD" 2>/dev/null || true
+  REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
+  USER_RUNTIME_DIR="/run/user/$REAL_UID"
+  sudo -u "$REAL_USER" env "XDG_RUNTIME_DIR=$USER_RUNTIME_DIR" "DBUS_SESSION_BUS_ADDRESS=unix:path=$USER_RUNTIME_DIR/bus" bash -c "$CLEAN_ENV_CMD" 2>/dev/null || true
 else
   bash -c "$CLEAN_ENV_CMD" 2>/dev/null || true
 fi

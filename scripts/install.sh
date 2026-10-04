@@ -403,7 +403,7 @@ if [ "$INSTALL_MODE" = "system" ]; then
   echo "  Installing systemd system units (/etc/systemd/system/)..."
   $SUDO cp "$ROOT_DIR/deploy/systemd/system/"* /etc/systemd/system/
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now conduit.target
+  $SUDO systemctl enable --now conduit-api.service conduit-proxy.service conduit.target
 
   echo "  Systemd system services enabled and started."
 
@@ -426,7 +426,7 @@ else
 
   cp "$ROOT_DIR/deploy/systemd/user/"* "$HOME/.config/systemd/user/"
   systemctl --user daemon-reload
-  systemctl --user enable --now conduit.target
+  systemctl --user enable --now conduit-api.service conduit-proxy.service conduit.target
   echo "  Systemd user services enabled and started."
 fi
 
