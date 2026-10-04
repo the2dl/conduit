@@ -5,6 +5,15 @@
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY
 unset CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE
 
+if [ -n "${NODE_OPTIONS:-}" ]; then
+    NODE_OPTIONS=$(echo "$NODE_OPTIONS" | sed -e 's/--use-env-proxy//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if [ -z "$NODE_OPTIONS" ]; then
+        unset NODE_OPTIONS
+    else
+        export NODE_OPTIONS
+    fi
+fi
+
 if [[ $- == *i* ]]; then
     echo "Conduit proxy environment disabled."
 fi

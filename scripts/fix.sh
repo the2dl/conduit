@@ -213,10 +213,12 @@ if [ -f "/var/lib/conduit/ui/index.html" ] || [ -d "/var/lib/conduit/ui" ]; then
   fi
 fi
 
-# Fix permissions
+# Fix permissions: public ca.pem world-readable (644), ca private key restricted (600)
 chown -R conduit:conduit /etc/conduit /var/lib/conduit /var/log/conduit 2>/dev/null || true
-chmod 750 /etc/conduit
-chmod 700 /etc/conduit/ca
+chmod 755 /etc/conduit
+chmod 755 /etc/conduit/ca 2>/dev/null || true
+chmod 644 /etc/conduit/ca/ca.pem 2>/dev/null || true
+chmod 600 /etc/conduit/ca/*key* 2>/dev/null || true
 chmod 755 /var/lib/conduit
 
 # ── 3. Systemd Services ───────────────────────────────────────────────
@@ -281,10 +283,11 @@ if [ -n "$CA_SOURCE" ]; then
     cp "$CA_SOURCE" /etc/conduit/ca/ca.pem
     [ -f "${CA_SOURCE%.pem}-key.pem" ] && cp "${CA_SOURCE%.pem}-key.pem" /etc/conduit/ca/ca-key.pem
     chown -R conduit:conduit /etc/conduit/ca
-    chmod 700 /etc/conduit/ca
-    chmod 600 /etc/conduit/ca/*
     log_fixed "Synchronized Root CA to /etc/conduit/ca/ca.pem"
   fi
+  chmod 755 /etc/conduit /etc/conduit/ca 2>/dev/null || true
+  chmod 644 /etc/conduit/ca/ca.pem 2>/dev/null || true
+  chmod 600 /etc/conduit/ca/*key* 2>/dev/null || true
 
   # Check OS trust anchor
   CA_TRUST_INSTALLED=false
@@ -403,7 +406,7 @@ echo "--- 5. Auditing Shell & Desktop Proxy Profiles ---"
 
 # Check /etc/profile.d/conduit.sh
 PROFILE_SH="/etc/profile.d/conduit.sh"
-if [ -f "$PROFILE_SH" ] && grep -q "127.0.0.1:8888" "$PROFILE_SH" && grep -q "NODE_EXTRA_CA_CERTS" "$PROFILE_SH"; then
+if [ -f "$PROFILE_SH" ] && grep -q "127.0.0.1:8888" "$PROFILE_SH" && grep -q "NODE_EXTRA_CA_CERTS" "$PROFILE_SH" && grep -q "NODE_OPTIONS" "$PROFILE_SH"; then
   log_ok "$PROFILE_SH is configured"
 else
   cat << 'EOF' > "$PROFILE_SH"
@@ -424,6 +427,14 @@ export NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem"
 export GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem"
 export CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem"
 export AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+
+# Node.js built-in fetch (undici) proxy support (Node 20.18+, 22.1+, 24+)
+if command -v node >/dev/null 2>&1 && node --use-env-proxy -e 'process.exit(0)' 2>/dev/null; then
+    case " ${NODE_OPTIONS:-} " in
+        *" --use-env-proxy "*) ;;
+        *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-env-proxy" ;;
+    esac
+fi
 EOF
   chmod 644 "$PROFILE_SH"
   log_fixed "Installed /etc/profile.d/conduit.sh with proxy & runtime CA bundles"
@@ -432,7 +443,7 @@ fi
 # Check ~/.config/environment.d/conduit.conf
 ENV_D="$REAL_HOME/.config/environment.d"
 ENV_CONF="$ENV_D/conduit.conf"
-if [ -f "$ENV_CONF" ] && grep -q "127.0.0.1:8888" "$ENV_CONF" && grep -q "NODE_EXTRA_CA_CERTS" "$ENV_CONF"; then
+if [ -f "$ENV_CONF" ] && grep -q "127.0.0.1:8888" "$ENV_CONF" && grep -q "NODE_EXTRA_CA_CERTS" "$ENV_CONF" && grep -q "NODE_OPTIONS" "$ENV_CONF"; then
   log_ok "$ENV_CONF is configured"
 else
   mkdir -p "$ENV_D"
@@ -452,6 +463,7 @@ NODE_EXTRA_CA_CERTS=/etc/conduit/ca/ca.pem
 GIT_SSL_CAINFO=/etc/conduit/ca/ca.pem
 CODEX_CA_CERTIFICATE=/etc/conduit/ca/ca.pem
 AWS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+NODE_OPTIONS=--use-env-proxy
 EOF
   chown -R "$REAL_USER:$REAL_USER" "$ENV_D"
   log_fixed "Created $ENV_CONF for desktop session environment"
@@ -480,14 +492,14 @@ done
 
 # Check Sudoers proxy environment preservation (/etc/sudoers.d/conduit-proxy)
 SUDOERS_FILE="/etc/sudoers.d/conduit-proxy"
-if [ -f "$SUDOERS_FILE" ] && grep -q "env_keep += .*http_proxy" "$SUDOERS_FILE"; then
+if [ -f "$SUDOERS_FILE" ] && grep -q "env_keep += .*http_proxy" "$SUDOERS_FILE" && grep -q "NODE_OPTIONS" "$SUDOERS_FILE"; then
   log_ok "Sudoers proxy environment preservation active ($SUDOERS_FILE)"
 else
   TMP_SUDOERS=$(mktemp)
   cat << 'EOF' > "$TMP_SUDOERS"
 # Conduit Security Gateway Proxy Environment Preservation
 Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY"
-Defaults env_keep += "CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE"
+Defaults env_keep += "CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE NODE_OPTIONS"
 EOF
   if command -v visudo >/dev/null 2>&1 && visudo -cf "$TMP_SUDOERS" >/dev/null 2>&1; then
     cp "$TMP_SUDOERS" "$SUDOERS_FILE"
@@ -524,13 +536,13 @@ SET_ENV_CMD='
            CURL_CA_BUNDLE="/etc/conduit/ca/ca.pem" SSL_CERT_FILE="/etc/conduit/ca/ca.pem" \
            REQUESTS_CA_BUNDLE="/etc/conduit/ca/ca.pem" NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem" \
            GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem" CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem" \
-           AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem"; do
+           AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem" NODE_OPTIONS="--use-env-proxy"; do
     systemctl --user set-environment "$v" 2>/dev/null || true
   done
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
       http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
-      CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE 2>/dev/null || true
+      CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE NODE_OPTIONS 2>/dev/null || true
   fi
 '
 REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)

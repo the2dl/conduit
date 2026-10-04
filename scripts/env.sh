@@ -21,6 +21,14 @@ export GIT_SSL_CAINFO="${DIR}/ca/ca.pem"
 export CODEX_CA_CERTIFICATE="${DIR}/ca/ca.pem"
 export AWS_CA_BUNDLE="${DIR}/ca/ca.pem"
 
+# Node.js built-in fetch (undici) proxy support (Node 20.18+, 22.1+, 24+)
+if command -v node >/dev/null 2>&1 && node --use-env-proxy -e 'process.exit(0)' 2>/dev/null; then
+    case " ${NODE_OPTIONS:-} " in
+        *" --use-env-proxy "*) ;;
+        *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-env-proxy" ;;
+    esac
+fi
+
 if [[ $- == *i* ]]; then
     echo "Conduit proxy environment enabled (127.0.0.1:8888)."
 fi
