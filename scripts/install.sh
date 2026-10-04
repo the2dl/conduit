@@ -378,18 +378,31 @@ if [ "$INSTALL_MODE" = "system" ]; then
   echo "  Installing UI dashboard to /var/lib/conduit/ui..."
   $SUDO cp -r "$ROOT_DIR/conduit-ui/build/"* /var/lib/conduit/ui/
 
+  CONFIG_SRC="$ROOT_DIR/conduit.example.toml"
+  if [ -f "$ROOT_DIR/conduit.toml" ]; then
+    CONFIG_SRC="$ROOT_DIR/conduit.toml"
+  fi
+
   # Install configuration if missing
   if [ ! -f /etc/conduit/conduit.toml ]; then
-    echo "  Installing default configuration to /etc/conduit/conduit.toml..."
-    $SUDO cp "$ROOT_DIR/conduit.example.toml" /etc/conduit/conduit.toml
-    $SUDO sed -i 's|^# ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
-    $SUDO sed -i 's|^# ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
-    $SUDO sed -i 's|^# ui_dir = .*|ui_dir = "/var/lib/conduit/ui"|' /etc/conduit/conduit.toml
+    echo "  Installing configuration from $(basename "$CONFIG_SRC") to /etc/conduit/conduit.toml..."
+    $SUDO cp "$CONFIG_SRC" /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^#\? \?ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^#\? \?ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
+    $SUDO sed -i 's|^#\? \?ui_dir = .*|ui_dir = "/var/lib/conduit/ui"|' /etc/conduit/conduit.toml
     if ! grep -q "^ui_dir =" /etc/conduit/conduit.toml; then
       echo 'ui_dir = "/var/lib/conduit/ui"' | $SUDO tee -a /etc/conduit/conduit.toml >/dev/null
     fi
   else
     echo "  Preserving existing /etc/conduit/conduit.toml."
+  fi
+
+  # Ensure CA directory exists and seed existing Root CA if present
+  $SUDO mkdir -p /etc/conduit/ca
+  if [ -f "$ROOT_DIR/ca/ca.pem" ] && [ -f "$ROOT_DIR/ca/ca-key.pem" ]; then
+    echo "  Seeding existing Root CA into /etc/conduit/ca/..."
+    $SUDO cp "$ROOT_DIR/ca/ca.pem" /etc/conduit/ca/ca.pem
+    $SUDO cp "$ROOT_DIR/ca/ca-key.pem" /etc/conduit/ca/ca-key.pem
   fi
 
   # Set secure permissions
