@@ -155,12 +155,12 @@ max_file_scan_size = 2097152          # 2MB max per extracted script/manifest
 [downstream]
 h2c = true
 
-# --- Cluster Node Registration ---
-[node]
-node_id = "node-a45bca93-95d"
-dragonfly_url = "redis://127.0.0.1:6380"
-name = "mars-local"
-heartbeat_interval_secs = 10
+# --- Cluster Node Registration (Multi-Node Clusters only) ---
+# [node]
+# node_id = "node-a45bca93-95d"
+# dragonfly_url = "redis://127.0.0.1:6380"
+# name = "mars-local"
+# heartbeat_interval_secs = 10
 
 # --- Allowlist (Bypass SSRF protection, caching, and inspection for trusted targets) ---
 [allowlist]
