@@ -60,6 +60,12 @@ while [[ $# -gt 0 ]]; do
     --system-proxy) SYSTEM_PROXY=true; shift ;;
     --firewall|--lockdown) ENABLE_FIREWALL=true; shift ;;
     --omarchy) ENABLE_OMARCHY=true; shift ;;
+    --disable)
+      exec "$SCRIPT_DIR/uninstall.sh" --disable
+      ;;
+    --uninstall|--purge)
+      exec "$SCRIPT_DIR/uninstall.sh" --purge
+      ;;
     --skip-build) SKIP_BUILD=true; shift ;;
     --skip-deps) SKIP_DEPS=true; shift ;;
     --skip-seed) SKIP_SEED=true; shift ;;
@@ -74,6 +80,10 @@ Usage:
 Turnkey Profiles:
   --all            Full install: system daemon, Valkey, UI, CA trust, system proxy, & firewall lockdown
   --all-omarchy    Full install + Omarchy desktop bar widget plugin
+
+Lifecycle Controls:
+  --disable        Cleanly disable all proxy routing, firewall, and services (zero ghost state)
+  --uninstall      Purge all installed binaries, configs, systemd services, and root CAs
 
 Modular Options:
   --system         Install as system-wide daemon in /usr/local/bin & /etc/conduit (requires sudo)
@@ -269,7 +279,7 @@ echo "--- 4. Configuring Valkey Datastore ---"
 
 DATASTORE_SVC=""
 for svc in valkey valkey-server redis redis-server; do
-  if systemctl list-unit-files "$svc.service" >/dev/null 2>&1 | grep -q "$svc.service"; then
+  if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "$svc.service"; then
     DATASTORE_SVC="$svc"
     break
   fi

@@ -69,6 +69,10 @@ Turnkey Profiles:
   --all            Full install: system daemon, Valkey, UI, CA trust, system proxy, & firewall lockdown
   --all-omarchy    Full install + Omarchy desktop bar widget plugin
 
+Lifecycle Controls:
+  --disable        Cleanly disable all proxy routing, firewall, and services (zero ghost state)
+  --uninstall      Purge all installed binaries, configs, systemd services, and root CAs
+
 Modular Options:
   --system         Install as system-wide daemon in /usr/local/bin & /etc/conduit (requires sudo)
   --user           Install as user-level service in ~/.config/systemd/user (default for non-root)
@@ -195,6 +199,8 @@ conduit-ctl status     # Inspect systemd units, Valkey status, proxy & API healt
 conduit-ctl restart    # Gracefully restart proxy and API
 conduit-ctl stop       # Stop proxy and API
 conduit-ctl start      # Start services
+conduit-ctl disable    # Cleanly teardown firewall, shell hooks, & services (zero ghost state)
+conduit-ctl uninstall  # Purge all binaries, configs, and trusted root CAs
 ```
 
 ### Systemd Service Management

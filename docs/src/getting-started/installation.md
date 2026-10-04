@@ -38,6 +38,8 @@ Installs as a user-level systemd service (`~/.config/systemd/user`) in your curr
 |---|---|
 | `--all` | Full install: system daemon, Valkey, UI, CA trust, system proxy, & firewall lockdown |
 | `--all-omarchy` | Full install + Omarchy desktop bar widget plugin |
+| `--disable` | Cleanly disable all proxy routing, firewall, and services (zero ghost state) |
+| `--uninstall` | Purge all installed binaries, configs, systemd services, and root CAs |
 | `--system` | Install system-wide daemons and config under `/etc/conduit` (requires sudo) |
 | `--user` | Install systemd user services under `~/.config/systemd/user` |
 | `--trust-ca` | Install and trust Conduit root CA into OS certificate store |

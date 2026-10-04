@@ -97,5 +97,11 @@ case "${1:-status}" in
     stop) stop ;;
     restart) restart ;;
     status) status ;;
-    *) echo "Usage: $0 {start|stop|restart|status}" ;;
+    disable)
+        exec "$DIR/scripts/uninstall.sh" --disable
+        ;;
+    uninstall|purge)
+        exec "$DIR/scripts/uninstall.sh" --purge
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|status|disable|uninstall}" ;;
 esac
