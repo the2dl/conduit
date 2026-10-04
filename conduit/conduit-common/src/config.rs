@@ -291,7 +291,7 @@ fn default_api_addr() -> String {
     "0.0.0.0:8443".into()
 }
 fn default_dragonfly_url() -> String {
-    "redis://127.0.0.1:6379".into()
+    "redis://127.0.0.1:6380".into()
 }
 fn default_cert_cache_size() -> usize {
     10_000

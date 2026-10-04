@@ -32,17 +32,30 @@ status() {
         fi
     done
 
-    # Check port 6379 or 6380
-    if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+    # Check configured port (default 6380)
+    CFG_PORT=6380
+    if [ -f "$DIR/conduit.toml" ]; then
+        DETECTED_PORT=$(grep -E '^(dragonfly_url|valkey_url|redis_url)' "$DIR/conduit.toml" | head -n1 | sed -n 's/.*:\([0-9]\+\).*/\1/p' || true)
+        if [ -n "$DETECTED_PORT" ]; then
+            CFG_PORT="$DETECTED_PORT"
+        fi
+    elif [ -f "/etc/conduit/conduit.toml" ]; then
+        DETECTED_PORT=$(grep -E '^(dragonfly_url|valkey_url|redis_url)' "/etc/conduit/conduit.toml" | head -n1 | sed -n 's/.*:\([0-9]\+\).*/\1/p' || true)
+        if [ -n "$DETECTED_PORT" ]; then
+            CFG_PORT="$DETECTED_PORT"
+        fi
+    fi
+
+    if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p "$CFG_PORT" ping 2>/dev/null | grep -q PONG; then
         DATASTORE_STATUS="RUNNING"
-        DATASTORE_INFO="${DATASTORE_INFO:-Native Valkey/Redis responding on port 6379}"
-    elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
+        DATASTORE_INFO="Native Valkey responding on port $CFG_PORT"
+    elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p "$CFG_PORT" ping 2>/dev/null | grep -q PONG; then
         DATASTORE_STATUS="RUNNING"
-        DATASTORE_INFO="${DATASTORE_INFO:-Native Valkey/Redis responding on port 6379}"
-    elif (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+        DATASTORE_INFO="Native Valkey/Redis responding on port $CFG_PORT"
+    elif (echo > /dev/tcp/127.0.0.1/"$CFG_PORT") 2>/dev/null; then
         DATASTORE_STATUS="RUNNING"
-        DATASTORE_INFO="${DATASTORE_INFO:-Datastore responding on 127.0.0.1:6379}"
-    elif docker ps --filter "name=conduit-dragonfly" --format '{{.Status}}' 2>/dev/null | grep -q "Up"; then
+        DATASTORE_INFO="Datastore responding on 127.0.0.1:$CFG_PORT"
+    elif [ "$DATASTORE_STATUS" = "STOPPED" ] && docker ps --filter "name=conduit-dragonfly" --format '{{.Status}}' 2>/dev/null | grep -q "Up"; then
         DATASTORE_STATUS="RUNNING"
         DATASTORE_INFO="Dragonfly container 'conduit-dragonfly' on port 6380"
     fi

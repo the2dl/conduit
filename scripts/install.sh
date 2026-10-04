@@ -275,62 +275,54 @@ echo "  Rustc version: $(rustc --version)"
 
 # ── 4. Start & Enable Valkey / Datastore Service ───────────────────────
 echo ""
-echo "--- 4. Configuring Valkey Datastore ---"
+echo "--- 4. Configuring Valkey Datastore on Dedicated Port 6380 ---"
 
-PORT_OK=false
-if (command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG) || \
-   (command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG) || \
-   (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
-  echo "  Active datastore already running on 127.0.0.1:6379 (ready)."
-  PORT_OK=true
-  for svc in valkey valkey-server redis redis-server; do
-    if systemctl is-failed "$svc.service" 2>/dev/null | grep -q failed; then
-      $SUDO systemctl disable --now "$svc.service" 2>/dev/null || true
-      $SUDO systemctl reset-failed "$svc.service" 2>/dev/null || true
-    fi
-  done
-else
-  DATASTORE_SVC=""
-  for svc in valkey valkey-server redis redis-server; do
-    if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "$svc.service"; then
-      DATASTORE_SVC="$svc"
-      break
-    fi
-  done
-
-  if [ -n "$DATASTORE_SVC" ]; then
-    echo "  Enabling and starting $DATASTORE_SVC.service..."
-    $SUDO systemctl enable --now "$DATASTORE_SVC.service" 2>/dev/null || true
-  else
-    echo "  Warning: No native valkey/redis systemd service unit found. Checking port 6379..."
+# Configure native Valkey / Redis to listen on port 6380 (avoids collision with standard Redis / NanoSIEM on 6379)
+for conf in /etc/valkey/valkey.conf /etc/valkey.conf /etc/redis/redis.conf /etc/redis.conf; do
+  if [ -f "$conf" ]; then
+    echo "  Configuring $conf to listen on dedicated port 6380..."
+    $SUDO sed -i 's|^port [0-9]\+|port 6380|' "$conf"
+    $SUDO sed -i 's|^#\? \?bind .*|bind 127.0.0.1 ::1|' "$conf"
   fi
+done
 
-  # Verify port 6379 connectivity
-  echo -n "  Verifying datastore response on :6379..."
-  for i in {1..30}; do
-    if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
-      PORT_OK=true
-      break
-    elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6379 ping 2>/dev/null | grep -q PONG; then
-      PORT_OK=true
-      break
-    elif (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; then
-      PORT_OK=true
-      break
-    fi
-    sleep 0.5
-  done
+DATASTORE_SVC=""
+for svc in valkey valkey-server redis redis-server; do
+  if systemctl list-unit-files "$svc.service" 2>/dev/null | grep -q "$svc.service"; then
+    DATASTORE_SVC="$svc"
+    break
+  fi
+done
+
+if [ -n "$DATASTORE_SVC" ]; then
+  echo "  Enabling and restarting $DATASTORE_SVC.service on port 6380..."
+  $SUDO systemctl reset-failed "$DATASTORE_SVC.service" 2>/dev/null || true
+  $SUDO systemctl restart "$DATASTORE_SVC.service" 2>/dev/null || $SUDO systemctl enable --now "$DATASTORE_SVC.service" 2>/dev/null || true
+else
+  echo "  Warning: No native valkey/redis systemd service unit found. Checking port 6380..."
 fi
+
+# Verify port 6380 connectivity
+echo -n "  Verifying datastore response on :6380..."
+PORT_OK=false
+for i in {1..30}; do
+  if command -v valkey-cli >/dev/null 2>&1 && valkey-cli -p 6380 ping 2>/dev/null | grep -q PONG; then
+    PORT_OK=true
+    break
+  elif command -v redis-cli >/dev/null 2>&1 && redis-cli -p 6380 ping 2>/dev/null | grep -q PONG; then
+    PORT_OK=true
+    break
+  elif (echo > /dev/tcp/127.0.0.1/6380) 2>/dev/null; then
+    PORT_OK=true
+    break
+  fi
+  sleep 0.5
+done
 
 if [ "$PORT_OK" = true ]; then
   echo " online."
 else
-  # Check 6380 fallback
-  if (echo > /dev/tcp/127.0.0.1/6380) 2>/dev/null; then
-    echo " port 6379 inactive, but found datastore on :6380."
-  else
-    echo " warning: Port 6379 not responding yet. Proceeding with installation..."
-  fi
+  echo " warning: Port 6380 not responding yet. Proceeding with installation..."
 fi
 
 # ── 5. Compile Conduit UI & Release Binaries ──────────────────────────
@@ -628,7 +620,7 @@ echo "=========================================================="
 echo "  Mode:             $INSTALL_MODE"
 echo "  Management UI:    http://localhost:8443"
 echo "  HTTP/HTTPS Proxy: http://127.0.0.1:8888"
-echo "  Datastore:        Valkey on 127.0.0.1:6379"
+echo "  Datastore:        Valkey on 127.0.0.1:6380"
 echo "  Prometheus Stats: http://localhost:9091"
 if [ "$ENABLE_OMARCHY" = true ]; then
   echo "  Omarchy Widget:   Enabled (bar -> right)"

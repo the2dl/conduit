@@ -8,9 +8,9 @@ listen_addr = "0.0.0.0:8888"
 api_addr = "0.0.0.0:8443"
 
 # Datastore connection URL (Valkey, Redis, or Dragonfly)
-# Valkey/Redis natively listen on standard port 6379. (Dockerized Dragonfly default was 6380).
+# Native Valkey listens on dedicated port 6380 (avoiding collision with standard Redis on 6379).
 # Keys 'valkey_url', 'redis_url', and 'dragonfly_url' are all supported.
-dragonfly_url = "redis://127.0.0.1:6379"
+dragonfly_url = "redis://127.0.0.1:6380"
 
 # Path to the SvelteKit UI build directory (optional, enables management dashboard)
 # ui_dir = "./conduit-ui/build" # or "/var/lib/conduit/ui" for system service installs

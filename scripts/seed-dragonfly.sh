@@ -24,14 +24,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 echo "=== Seeding Datastore via $API ==="
 
 REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
-REDIS_PORT="${REDIS_PORT:-6379}"
-
-# If default port 6379 is not listening, test 6380 (docker fallback)
-if ! (echo > /dev/tcp/"$REDIS_HOST"/"$REDIS_PORT") 2>/dev/null; then
-  if (echo > /dev/tcp/"$REDIS_HOST"/6380) 2>/dev/null; then
-    REDIS_PORT=6380
-  fi
-fi
+REDIS_PORT="${REDIS_PORT:-6380}"
 
 redis_cmd() {
   if command -v valkey-cli >/dev/null 2>&1; then
