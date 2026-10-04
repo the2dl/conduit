@@ -52,15 +52,6 @@ echo ""
 echo "--- 3. Removing Shell Proxy Profiles ---"
 rm -f /etc/profile.d/conduit.sh /etc/sudoers.d/conduit-proxy /etc/apt/apt.conf.d/99conduit-proxy
 
-if [ -f /etc/environment ]; then
-  sed -i '/# Conduit Security Gateway/d' /etc/environment 2>/dev/null || true
-  for evar in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
-              CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE; do
-    sed -i "/^$evar=/d" /etc/environment 2>/dev/null || true
-  done
-  echo "  Cleaned /etc/environment"
-fi
-
 for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc" "$REAL_HOME/.bash_profile" "$REAL_HOME/.profile"; do
   if [ -f "$rc" ]; then
     sed -i '/# Conduit MITM security gateway proxy defaults/d' "$rc" 2>/dev/null || true

@@ -497,37 +497,6 @@ EOF
   rm -f "$TMP_SUDOERS"
 fi
 
-# Check system-wide /etc/environment
-if [ -f /etc/environment ]; then
-  if grep -q "http_proxy=http://127.0.0.1:8888" /etc/environment && grep -q "NODE_EXTRA_CA_CERTS" /etc/environment; then
-    log_ok "/etc/environment defaults are configured"
-  else
-    sed -i '/# Conduit Security Gateway/d' /etc/environment 2>/dev/null || true
-    for evar in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
-                CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE; do
-      sed -i "/^$evar=/d" /etc/environment 2>/dev/null || true
-    done
-    cat << 'EOF' >> /etc/environment
-
-# Conduit Security Gateway
-http_proxy=http://127.0.0.1:8888
-https_proxy=http://127.0.0.1:8888
-HTTP_PROXY=http://127.0.0.1:8888
-HTTPS_PROXY=http://127.0.0.1:8888
-ALL_PROXY=http://127.0.0.1:8888
-no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
-NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
-CURL_CA_BUNDLE=/etc/conduit/ca/ca.pem
-SSL_CERT_FILE=/etc/conduit/ca/ca.pem
-REQUESTS_CA_BUNDLE=/etc/conduit/ca/ca.pem
-NODE_EXTRA_CA_CERTS=/etc/conduit/ca/ca.pem
-GIT_SSL_CAINFO=/etc/conduit/ca/ca.pem
-CODEX_CA_CERTIFICATE=/etc/conduit/ca/ca.pem
-AWS_CA_BUNDLE=/etc/conduit/ca/ca.pem
-EOF
-    log_fixed "Configured /etc/environment defaults"
-  fi
-fi
 
 # Check APT proxy if Debian/Ubuntu
 if [ "$DISTRO" = "debian" ] || [ -d /etc/apt/apt.conf.d ]; then
