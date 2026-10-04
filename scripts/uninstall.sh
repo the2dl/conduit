@@ -87,6 +87,10 @@ CLEAN_ENV_CMD='
       http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= no_proxy= NO_PROXY= \
       CURL_CA_BUNDLE= SSL_CERT_FILE= REQUESTS_CA_BUNDLE= NODE_EXTRA_CA_CERTS= GIT_SSL_CAINFO= 2>/dev/null || true
   fi
+  # Restart uwsm application launcher daemon so new terminals/apps get clean env
+  systemctl --user restart wayland-wm-app-daemon.service 2>/dev/null || true
+  # Terminate any stale codex app server daemons holding proxy state
+  pkill -u "$USER" -f "codex-app-server" 2>/dev/null || true
 '
 if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
   REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
