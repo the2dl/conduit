@@ -64,12 +64,14 @@ echo ""
 echo "--- 4. Cleaning User Session & Chrome Startup Flags ---"
 rm -f "$REAL_HOME/.config/environment.d/conduit.conf"
 
-if [ -f "$REAL_HOME/.config/chrome-flags.conf" ]; then
-  sed -i '/--proxy-server=/d' "$REAL_HOME/.config/chrome-flags.conf" 2>/dev/null || true
-  sed -i '/--proxy-bypass-list=/d' "$REAL_HOME/.config/chrome-flags.conf" 2>/dev/null || true
-  sed -i '/# Conduit MITM Proxy/d' "$REAL_HOME/.config/chrome-flags.conf" 2>/dev/null || true
-  echo "  Cleaned proxy flags from $REAL_HOME/.config/chrome-flags.conf"
-fi
+for flag_file in "$REAL_HOME/.config/chrome-flags.conf" "$REAL_HOME/.config/chromium-flags.conf" "$REAL_HOME/.config/google-chrome-flags.conf"; do
+  if [ -f "$flag_file" ]; then
+    sed -i '/--proxy-server=/d' "$flag_file" 2>/dev/null || true
+    sed -i '/--proxy-bypass-list=/d' "$flag_file" 2>/dev/null || true
+    sed -i '/# Conduit MITM Proxy/d' "$flag_file" 2>/dev/null || true
+    echo "  Cleaned proxy flags from $flag_file"
+  fi
+done
 
 # 5. Purge Systemd User Session & D-Bus Environment
 echo ""
