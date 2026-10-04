@@ -337,6 +337,62 @@ if [ -n "$CA_SOURCE" ]; then
       log_fixed "Imported Root CA into Chrome/Chromium NSS database"
     fi
   fi
+
+  # Check Firefox / LibreWolf / Zen Enterprise Policies
+  FF_POLICY="/etc/firefox/policies/policies.json"
+  if [ -f "$FF_POLICY" ] && grep -q "security.enterprise_roots.enabled" "$FF_POLICY" 2>/dev/null; then
+    log_ok "Firefox enterprise policy is active ($FF_POLICY)"
+  else
+    mkdir -p /etc/firefox/policies
+    cat << 'EOF' > "$FF_POLICY"
+{
+  "policies": {
+    "Certificates": {
+      "Install": [
+        "/etc/conduit/ca/ca.pem"
+      ]
+    },
+    "Preferences": {
+      "security.enterprise_roots.enabled": true
+    }
+  }
+}
+EOF
+    chmod 644 "$FF_POLICY"
+    for fork in librewolf zen waterfox floorp; do
+      if [ -d "/etc/$fork" ] || command -v "$fork" >/dev/null 2>&1; then
+        mkdir -p "/etc/$fork/policies"
+        cp "$FF_POLICY" "/etc/$fork/policies/policies.json" 2>/dev/null || true
+      fi
+    done
+    log_fixed "Configured Firefox / Gecko browser enterprise policies for Root CA trust"
+  fi
+
+  # Check Java Keystore if keytool is available
+  if command -v keytool >/dev/null 2>&1; then
+    JAVA_CACERTS=""
+    for cand in "${JAVA_HOME:-}/lib/security/cacerts" "${JAVA_HOME:-}/jre/lib/security/cacerts" \
+                /etc/ssl/certs/java/cacerts /usr/lib/jvm/default-runtime/lib/security/cacerts \
+                /usr/lib/jvm/default/lib/security/cacerts; do
+      if [ -f "$cand" ]; then
+        JAVA_CACERTS="$cand"
+        break
+      fi
+    done
+    if [ -z "$JAVA_CACERTS" ]; then
+      JAVA_CACERTS=$(find /usr/lib/jvm -name "cacerts" 2>/dev/null | head -n1 || true)
+    fi
+    if [ -n "$JAVA_CACERTS" ]; then
+      if keytool -list -alias conduit-ca -keystore "$JAVA_CACERTS" -storepass changeit >/dev/null 2>&1; then
+        log_ok "Root CA trusted in Java keystore ($JAVA_CACERTS)"
+      else
+        keytool -delete -alias conduit-ca -keystore "$JAVA_CACERTS" -storepass changeit >/dev/null 2>&1 || true
+        if keytool -importcert -trustcacerts -noprompt -alias conduit-ca -keystore "$JAVA_CACERTS" -storepass changeit -file "$CA_SOURCE" >/dev/null 2>&1; then
+          log_fixed "Imported Root CA into Java keystore ($JAVA_CACERTS)"
+        fi
+      fi
+    fi
+  fi
 else
   log_warn "No Root CA certificate found. Start Conduit proxy once or run: sudo ./scripts/install.sh --trust-ca"
 fi
@@ -347,7 +403,7 @@ echo "--- 5. Auditing Shell & Desktop Proxy Profiles ---"
 
 # Check /etc/profile.d/conduit.sh
 PROFILE_SH="/etc/profile.d/conduit.sh"
-if [ -f "$PROFILE_SH" ] && grep -q "127.0.0.1:8888" "$PROFILE_SH"; then
+if [ -f "$PROFILE_SH" ] && grep -q "127.0.0.1:8888" "$PROFILE_SH" && grep -q "NODE_EXTRA_CA_CERTS" "$PROFILE_SH"; then
   log_ok "$PROFILE_SH is configured"
 else
   cat << 'EOF' > "$PROFILE_SH"
@@ -359,15 +415,24 @@ export HTTPS_PROXY="http://127.0.0.1:8888"
 export ALL_PROXY="http://127.0.0.1:8888"
 export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
 export no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
+
+# CA Certificates for developer runtimes & CLIs (Node, Python, Git, OpenSSL, AWS)
+export CURL_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+export SSL_CERT_FILE="/etc/conduit/ca/ca.pem"
+export REQUESTS_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+export NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem"
+export GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem"
+export CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem"
+export AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem"
 EOF
   chmod 644 "$PROFILE_SH"
-  log_fixed "Installed /etc/profile.d/conduit.sh for system-wide shells"
+  log_fixed "Installed /etc/profile.d/conduit.sh with proxy & runtime CA bundles"
 fi
 
 # Check ~/.config/environment.d/conduit.conf
 ENV_D="$REAL_HOME/.config/environment.d"
 ENV_CONF="$ENV_D/conduit.conf"
-if [ -f "$ENV_CONF" ] && grep -q "127.0.0.1:8888" "$ENV_CONF"; then
+if [ -f "$ENV_CONF" ] && grep -q "127.0.0.1:8888" "$ENV_CONF" && grep -q "NODE_EXTRA_CA_CERTS" "$ENV_CONF"; then
   log_ok "$ENV_CONF is configured"
 else
   mkdir -p "$ENV_D"
@@ -380,6 +445,13 @@ HTTPS_PROXY=http://127.0.0.1:8888
 ALL_PROXY=http://127.0.0.1:8888
 no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
 NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
+CURL_CA_BUNDLE=/etc/conduit/ca/ca.pem
+SSL_CERT_FILE=/etc/conduit/ca/ca.pem
+REQUESTS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+NODE_EXTRA_CA_CERTS=/etc/conduit/ca/ca.pem
+GIT_SSL_CAINFO=/etc/conduit/ca/ca.pem
+CODEX_CA_CERTIFICATE=/etc/conduit/ca/ca.pem
+AWS_CA_BUNDLE=/etc/conduit/ca/ca.pem
 EOF
   chown -R "$REAL_USER:$REAL_USER" "$ENV_D"
   log_fixed "Created $ENV_CONF for desktop session environment"
@@ -406,18 +478,90 @@ EOF
   fi
 done
 
+# Check Sudoers proxy environment preservation (/etc/sudoers.d/conduit-proxy)
+SUDOERS_FILE="/etc/sudoers.d/conduit-proxy"
+if [ -f "$SUDOERS_FILE" ] && grep -q "env_keep += .*http_proxy" "$SUDOERS_FILE"; then
+  log_ok "Sudoers proxy environment preservation active ($SUDOERS_FILE)"
+else
+  TMP_SUDOERS=$(mktemp)
+  cat << 'EOF' > "$TMP_SUDOERS"
+# Conduit Security Gateway Proxy Environment Preservation
+Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY"
+Defaults env_keep += "CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE"
+EOF
+  if command -v visudo >/dev/null 2>&1 && visudo -cf "$TMP_SUDOERS" >/dev/null 2>&1; then
+    cp "$TMP_SUDOERS" "$SUDOERS_FILE"
+    chmod 440 "$SUDOERS_FILE"
+    log_fixed "Configured sudoers proxy environment preservation ($SUDOERS_FILE)"
+  fi
+  rm -f "$TMP_SUDOERS"
+fi
+
+# Check system-wide /etc/environment
+if [ -f /etc/environment ]; then
+  if grep -q "http_proxy=http://127.0.0.1:8888" /etc/environment && grep -q "NODE_EXTRA_CA_CERTS" /etc/environment; then
+    log_ok "/etc/environment defaults are configured"
+  else
+    sed -i '/# Conduit Security Gateway/d' /etc/environment 2>/dev/null || true
+    for evar in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
+                CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE; do
+      sed -i "/^$evar=/d" /etc/environment 2>/dev/null || true
+    done
+    cat << 'EOF' >> /etc/environment
+
+# Conduit Security Gateway
+http_proxy=http://127.0.0.1:8888
+https_proxy=http://127.0.0.1:8888
+HTTP_PROXY=http://127.0.0.1:8888
+HTTPS_PROXY=http://127.0.0.1:8888
+ALL_PROXY=http://127.0.0.1:8888
+no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
+NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
+CURL_CA_BUNDLE=/etc/conduit/ca/ca.pem
+SSL_CERT_FILE=/etc/conduit/ca/ca.pem
+REQUESTS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+NODE_EXTRA_CA_CERTS=/etc/conduit/ca/ca.pem
+GIT_SSL_CAINFO=/etc/conduit/ca/ca.pem
+CODEX_CA_CERTIFICATE=/etc/conduit/ca/ca.pem
+AWS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+EOF
+    log_fixed "Configured /etc/environment defaults"
+  fi
+fi
+
+# Check APT proxy if Debian/Ubuntu
+if [ "$DISTRO" = "debian" ] || [ -d /etc/apt/apt.conf.d ]; then
+  APT_CONF="/etc/apt/apt.conf.d/99conduit-proxy"
+  if [ -f "$APT_CONF" ] && grep -q "127.0.0.1:8888" "$APT_CONF"; then
+    log_ok "APT proxy configuration active ($APT_CONF)"
+  else
+    mkdir -p /etc/apt/apt.conf.d
+    cat << 'EOF' > "$APT_CONF"
+Acquire::http::Proxy "http://127.0.0.1:8888";
+Acquire::https::Proxy "http://127.0.0.1:8888";
+EOF
+    chmod 644 "$APT_CONF"
+    log_fixed "Configured APT proxy ($APT_CONF)"
+  fi
+fi
+
 # Ensure live user systemd and D-Bus session have proxy
 SET_ENV_CMD='
   for v in http_proxy="http://127.0.0.1:8888" https_proxy="http://127.0.0.1:8888" \
            HTTP_PROXY="http://127.0.0.1:8888" HTTPS_PROXY="http://127.0.0.1:8888" \
            ALL_PROXY="http://127.0.0.1:8888" \
            no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local" \
-           NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"; do
+           NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local" \
+           CURL_CA_BUNDLE="/etc/conduit/ca/ca.pem" SSL_CERT_FILE="/etc/conduit/ca/ca.pem" \
+           REQUESTS_CA_BUNDLE="/etc/conduit/ca/ca.pem" NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem" \
+           GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem" CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem" \
+           AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem"; do
     systemctl --user set-environment "$v" 2>/dev/null || true
   done
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
-      http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY 2>/dev/null || true
+      http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
+      CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE 2>/dev/null || true
   fi
 '
 REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)

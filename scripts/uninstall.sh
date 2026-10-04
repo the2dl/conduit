@@ -50,7 +50,16 @@ fi
 # 3. Remove System and User Shell Proxy Profiles
 echo ""
 echo "--- 3. Removing Shell Proxy Profiles ---"
-rm -f /etc/profile.d/conduit.sh
+rm -f /etc/profile.d/conduit.sh /etc/sudoers.d/conduit-proxy /etc/apt/apt.conf.d/99conduit-proxy
+
+if [ -f /etc/environment ]; then
+  sed -i '/# Conduit Security Gateway/d' /etc/environment 2>/dev/null || true
+  for evar in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
+              CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO CODEX_CA_CERTIFICATE AWS_CA_BUNDLE; do
+    sed -i "/^$evar=/d" /etc/environment 2>/dev/null || true
+  done
+  echo "  Cleaned /etc/environment"
+fi
 
 for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc" "$REAL_HOME/.bash_profile" "$REAL_HOME/.profile"; do
   if [ -f "$rc" ]; then
@@ -79,13 +88,15 @@ echo "--- 5. Purging Systemd User & D-Bus Session Environment ---"
 CLEAN_ENV_CMD='
   systemctl --user daemon-reload 2>/dev/null || true
   for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY \
-           CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO; do
+           CURL_CA_BUNDLE SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS GIT_SSL_CAINFO \
+           CODEX_CA_CERTIFICATE AWS_CA_BUNDLE; do
     systemctl --user unset-environment "$v" 2>/dev/null || true
   done
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
       http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= no_proxy= NO_PROXY= \
-      CURL_CA_BUNDLE= SSL_CERT_FILE= REQUESTS_CA_BUNDLE= NODE_EXTRA_CA_CERTS= GIT_SSL_CAINFO= 2>/dev/null || true
+      CURL_CA_BUNDLE= SSL_CERT_FILE= REQUESTS_CA_BUNDLE= NODE_EXTRA_CA_CERTS= GIT_SSL_CAINFO= \
+      CODEX_CA_CERTIFICATE= AWS_CA_BUNDLE= 2>/dev/null || true
   fi
   # Restart uwsm application launcher daemon so new terminals/apps get clean env
   systemctl --user restart wayland-wm-app-daemon.service 2>/dev/null || true
@@ -138,7 +149,28 @@ if [ "$MODE" = "--purge" ] || [ "$MODE" = "purge" ]; then
       certutil -d "sql:$REAL_HOME/.pki/nssdb" -D -n "Conduit Root CA" 2>/dev/null || true
     fi
   fi
-  echo "  Root CA removed from OS and NSS trust stores."
+
+  # Remove Firefox / LibreWolf / Zen enterprise policies
+  for pdir in /etc/firefox /etc/librewolf /etc/zen /etc/waterfox /etc/floorp; do
+    if [ -f "$pdir/policies/policies.json" ]; then
+      rm -f "$pdir/policies/policies.json"
+      rmdir "$pdir/policies" 2>/dev/null || true
+      rmdir "$pdir" 2>/dev/null || true
+      echo "  Removed enterprise policy from $pdir"
+    fi
+  done
+
+  # Remove from Java keystore if keytool is present
+  if command -v keytool >/dev/null 2>&1; then
+    for cand in "${JAVA_HOME:-}/lib/security/cacerts" "${JAVA_HOME:-}/jre/lib/security/cacerts" \
+                /etc/ssl/certs/java/cacerts /usr/lib/jvm/default-runtime/lib/security/cacerts \
+                /usr/lib/jvm/default/lib/security/cacerts; do
+      if [ -f "$cand" ]; then
+        keytool -delete -alias conduit-ca -keystore "$cand" -storepass changeit >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+  echo "  Root CA removed from OS, NSS, Firefox, and Java trust stores."
 
   echo ""
   echo "--- 8. Purging Binaries & Configurations ---"
