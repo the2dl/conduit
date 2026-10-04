@@ -509,6 +509,11 @@ if [ "$TRUST_CA" = true ]; then
   fi
 
   if [ -f "$CA_SOURCE" ] && [ -s "$CA_SOURCE" ]; then
+    if [ "$INSTALL_MODE" = "system" ] && [ -f "/etc/conduit/ca/ca.pem" ]; then
+      $SUDO chmod 755 /etc/conduit /etc/conduit/ca 2>/dev/null || true
+      $SUDO chmod 644 /etc/conduit/ca/ca.pem 2>/dev/null || true
+      $SUDO chmod 600 /etc/conduit/ca/*key* 2>/dev/null || true
+    fi
     if command -v update-ca-certificates >/dev/null 2>&1; then
       # Debian / Ubuntu
       $SUDO cp "$CA_SOURCE" /usr/local/share/ca-certificates/conduit-ca.crt
