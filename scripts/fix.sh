@@ -440,6 +440,25 @@ EOF
   log_fixed "Installed /etc/profile.d/conduit.sh with proxy & runtime CA bundles"
 fi
 
+# Check user shell RC files (~/.bashrc, ~/.zshrc)
+for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
+  if [ -f "$rc" ]; then
+    if ! grep -q "/etc/profile.d/conduit.sh" "$rc" && ! grep -q "scripts/env.sh" "$rc"; then
+      cat >> "$rc" << 'EOF'
+
+# Conduit Security Gateway Shell Proxy Environment
+if [ -f /etc/profile.d/conduit.sh ]; then
+  . /etc/profile.d/conduit.sh
+fi
+EOF
+      chown "$REAL_USER:$REAL_USER" "$rc" 2>/dev/null || true
+      log_fixed "Added Conduit proxy environment hook to $(basename "$rc")"
+    else
+      log_ok "Shell configuration $(basename "$rc") is configured"
+    fi
+  fi
+done
+
 # Check ~/.config/environment.d/conduit.conf
 ENV_D="$REAL_HOME/.config/environment.d"
 ENV_CONF="$ENV_D/conduit.conf"
@@ -693,3 +712,8 @@ else
   echo -e " \033[33mAudit Complete: $FIX_COUNT repairs applied, $WARN_COUNT warnings remaining.\033[0m"
 fi
 echo "=========================================================="
+echo ""
+echo " [!] Important: Running shells do not automatically inherit updated environment variables."
+echo "     To apply changes in THIS terminal window immediately, run:"
+echo "       source ~/.bashrc"
+echo "     (or open a new terminal window / tab)."

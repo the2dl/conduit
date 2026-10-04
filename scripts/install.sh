@@ -633,6 +633,25 @@ EOF
   $SUDO chmod 644 /etc/profile.d/conduit.sh
   echo "  /etc/profile.d/conduit.sh installed."
 
+  # Ensure user shell configuration files (~/.bashrc, ~/.zshrc) source Conduit proxy
+  for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
+    if [ -f "$rc" ]; then
+      if ! grep -q "/etc/profile.d/conduit.sh" "$rc" && ! grep -q "scripts/env.sh" "$rc"; then
+        cat >> "$rc" << 'EOF'
+
+# Conduit Security Gateway Shell Proxy Environment
+if [ -f /etc/profile.d/conduit.sh ]; then
+  . /etc/profile.d/conduit.sh
+fi
+EOF
+        if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+          chown "$REAL_USER:$REAL_USER" "$rc"
+        fi
+        echo "  Conduit proxy environment added to $(basename "$rc")."
+      fi
+    fi
+  done
+
   # Configure user environment defaults for GUI apps and Wayland/systemd session
   echo "  Configuring user desktop session and browser proxy flags..."
   mkdir -p "$REAL_HOME/.config/environment.d"
@@ -845,4 +864,9 @@ if [ "$ENABLE_OMARCHY" = false ] && [ -d "$REAL_HOME/.config/omarchy" ]; then
 fi
 echo "    source ./scripts/env.sh         Enable proxy in current shell"
 echo "    source ./scripts/unenv.sh       Disable proxy in current shell"
+echo ""
+echo "  Note: Running terminal shells do not automatically inherit updated environment variables."
+echo "  To activate immediately in THIS terminal window, run:"
+echo "    source ~/.bashrc"
+echo "  (or open a new terminal window / tab)."
 echo "=========================================================="
