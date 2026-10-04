@@ -561,10 +561,64 @@ export no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 EOF
   $SUDO chmod 644 /etc/profile.d/conduit.sh
   echo "  /etc/profile.d/conduit.sh installed."
-else
-  echo "  To route your current shell: source ./scripts/env.sh"
-  echo "  To install system-wide across all shells: sudo $0 --system-proxy"
-fi
+
+  # Configure user environment defaults for GUI apps and Wayland/systemd session
+  echo "  Configuring user desktop session and browser proxy flags..."
+  mkdir -p "$REAL_HOME/.config/environment.d"
+  cat << 'EOF' > "$REAL_HOME/.config/environment.d/conduit.conf"
+# Conduit Security Gateway User Environment
+http_proxy=http://127.0.0.1:8888
+https_proxy=http://127.0.0.1:8888
+HTTP_PROXY=http://127.0.0.1:8888
+HTTPS_PROXY=http://127.0.0.1:8888
+ALL_PROXY=http://127.0.0.1:8888
+no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
+NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
+EOF
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    chown -R "$REAL_USER:$REAL_USER" "$REAL_HOME/.config/environment.d"
+  fi
+
+  # Configure Chrome / Chromium browser proxy flags
+  for flag_file in "$REAL_HOME/.config/chrome-flags.conf" "$REAL_HOME/.config/chromium-flags.conf" "$REAL_HOME/.config/google-chrome-flags.conf"; do
+    if [ -f "$flag_file" ] || [ "$(basename "$flag_file")" = "chrome-flags.conf" ]; then
+      sed -i '/--proxy-server=/d' "$flag_file" 2>/dev/null || true
+      sed -i '/--proxy-bypass-list=/d' "$flag_file" 2>/dev/null || true
+      sed -i '/# Conduit MITM Proxy/d' "$flag_file" 2>/dev/null || true
+      cat >> "$flag_file" << 'EOF'
+
+# Conduit MITM Proxy
+--proxy-server=http://127.0.0.1:8888
+--proxy-bypass-list=*.local;10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;169.254.0.0/16
+EOF
+      if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        chown "$REAL_USER:$REAL_USER" "$flag_file"
+      fi
+    fi
+  done
+
+  # Propagate into live systemd user and D-Bus session
+  SET_ENV_CMD='
+    for v in http_proxy="http://127.0.0.1:8888" https_proxy="http://127.0.0.1:8888" \
+             HTTP_PROXY="http://127.0.0.1:8888" HTTPS_PROXY="http://127.0.0.1:8888" \
+             ALL_PROXY="http://127.0.0.1:8888" \
+             no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local" \
+             NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"; do
+      systemctl --user set-environment "$v" 2>/dev/null || true
+    done
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+      dbus-update-activation-environment --systemd \
+        http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY 2>/dev/null || true
+    fi
+  '
+  if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
+    USER_RUNTIME_DIR="/run/user/$REAL_UID"
+    sudo -u "$REAL_USER" env "XDG_RUNTIME_DIR=$USER_RUNTIME_DIR" "DBUS_SESSION_BUS_ADDRESS=unix:path=$USER_RUNTIME_DIR/bus" bash -c "$SET_ENV_CMD" 2>/dev/null || true
+  else
+    bash -c "$SET_ENV_CMD" 2>/dev/null || true
+  fi
+  echo "  User desktop session environment configured."
 
 # ── 12. Host Egress Firewall Lockdown ─────────────────────────────────
 if [ "$ENABLE_FIREWALL" = true ]; then
