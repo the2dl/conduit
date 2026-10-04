@@ -60,6 +60,9 @@ while [[ $# -gt 0 ]]; do
     --system-proxy) SYSTEM_PROXY=true; shift ;;
     --firewall|--lockdown) ENABLE_FIREWALL=true; shift ;;
     --omarchy) ENABLE_OMARCHY=true; shift ;;
+    --fix|--repair)
+      exec "$SCRIPT_DIR/fix.sh" "$@"
+      ;;
     --disable)
       exec "$SCRIPT_DIR/uninstall.sh" --disable
       ;;
@@ -82,6 +85,7 @@ Turnkey Profiles:
   --all-omarchy    Full install + Omarchy desktop bar widget plugin
 
 Lifecycle Controls:
+  --fix            Audit installation, detect configuration gaps, and self-repair (no rebuild)
   --disable        Cleanly disable all proxy routing, firewall, and services (zero ghost state)
   --uninstall      Purge all installed binaries, configs, systemd services, and root CAs
 

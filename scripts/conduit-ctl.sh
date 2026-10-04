@@ -110,11 +110,18 @@ case "${1:-status}" in
     stop) stop ;;
     restart) restart ;;
     status) status ;;
+    fix|repair)
+        if [ "$EUID" -ne 0 ]; then
+            exec sudo "$DIR/scripts/fix.sh" "$@"
+        else
+            exec "$DIR/scripts/fix.sh" "$@"
+        fi
+        ;;
     disable)
         exec "$DIR/scripts/uninstall.sh" --disable
         ;;
     uninstall|purge)
         exec "$DIR/scripts/uninstall.sh" --purge
         ;;
-    *) echo "Usage: $0 {start|stop|restart|status|disable|uninstall}" ;;
+    *) echo "Usage: $0 {start|stop|restart|status|fix|disable|uninstall}" ;;
 esac
