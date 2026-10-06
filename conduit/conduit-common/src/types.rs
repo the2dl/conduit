@@ -104,6 +104,8 @@ pub enum BlockReason {
     ConnectionLimit,
     DlpViolation,
     PackageMalware,
+    PostProtection,
+    RiskyTld,
 }
 
 impl std::fmt::Display for BlockReason {

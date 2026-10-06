@@ -59,6 +59,8 @@ pub struct RequestContext {
     pub package_body_buffer: Option<Vec<u8>>,
     /// Whether this request is an identified package archive download.
     pub is_package_download: bool,
+    /// When set, enforces max body bytes on uncategorized POST/PUT requests (streaming/chunked).
+    pub uncategorized_post_max_bytes: Option<usize>,
     /// YARA / supply chain threat match details if detected: (rule_name, infected_file).
     pub package_threat_match: Option<(String, String)>,
 }
@@ -107,6 +109,7 @@ impl RequestContext {
             dlp_matched_snippet: None,
             package_body_buffer: None,
             is_package_download: false,
+            uncategorized_post_max_bytes: None,
             package_threat_match: None,
         }
     }

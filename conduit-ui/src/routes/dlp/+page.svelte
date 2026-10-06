@@ -42,7 +42,7 @@
 			pattern: rule.regex,
 			action: rule.action,
 			builtin: rule.builtin,
-			allowed_domains: rule.allowed_domains
+			allowed_domains: (rule.allowed_domains || []).join(', ')
 		});
 	}
 

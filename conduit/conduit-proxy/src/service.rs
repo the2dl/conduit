@@ -285,6 +285,23 @@ impl ClearGateService {
             }
         }
 
+        // TLD protection evaluation (skipped for allowlisted hosts)
+        let mut tld_blocked = false;
+        let mut blocked_tld_name = String::new();
+        if !is_allowlisted {
+            let tld_cfg = rt_cfg.effective_tld_protection(self.config.tld_protection.as_ref());
+            if tld_cfg.enabled {
+                let host_tld = crate::threat::heuristics::extract_tld(&host);
+                let is_known_bad = crate::threat::heuristics::is_bad_tld_name(host_tld);
+                if tld_cfg.is_tld_blocked(host_tld, is_known_bad) {
+                    if tld_cfg.action == "block" || rt_cfg.prevention_mode {
+                        tld_blocked = true;
+                        blocked_tld_name = host_tld.to_string();
+                    }
+                }
+            }
+        }
+
         // Threat evaluation (skipped for allowlisted hosts)
         let mut threat_blocked = false;
         let mut rep_blocked = false;
@@ -324,10 +341,12 @@ impl ClearGateService {
             }
         }
 
-        let should_block =
-            (threat_blocked || action == PolicyAction::Block) && rt_cfg.prevention_mode;
+        let should_block = tld_blocked
+            || ((threat_blocked || action == PolicyAction::Block) && rt_cfg.prevention_mode);
         if should_block {
-            let block_reason = if threat_blocked {
+            let block_reason = if tld_blocked {
+                BlockReason::RiskyTld
+            } else if threat_blocked {
                 if rep_blocked {
                     BlockReason::ThreatReputation
                 } else {
@@ -337,6 +356,7 @@ impl ClearGateService {
                 BlockReason::Policy
             };
             let reason_text = match block_reason {
+                BlockReason::RiskyTld => format!("High-risk TLD (.{blocked_tld_name})"),
                 BlockReason::ThreatReputation => "Threat detected (reputation)".to_string(),
                 BlockReason::ThreatHeuristic => "Threat detected (heuristic)".to_string(),
                 BlockReason::Policy => match matched_rule_name {
@@ -346,7 +366,7 @@ impl ClearGateService {
                 other => format!("{other:?}"),
             };
 
-            info!(host = %host, category = ?category, "Blocking CONNECT");
+            info!(host = %host, category = ?category, reason = %reason_text, "Blocking CONNECT");
 
             let node_name = crate::block_page::get_node_name(&self.config);
             let entry_uuid = uuid::Uuid::new_v4();
@@ -369,7 +389,19 @@ impl ClearGateService {
                     _ => return None,
                 };
 
-                let block_ctx = if threat_blocked {
+                let block_ctx = if tld_blocked {
+                    crate::block_page::BlockPageContext::for_risky_tld(
+                        &host,
+                        "/",
+                        "CONNECT",
+                        &blocked_tld_name,
+                        username.as_deref(),
+                        &client_ip,
+                        &timestamp,
+                        &ref_id,
+                        &node_name,
+                    )
+                } else if threat_blocked {
                     crate::block_page::BlockPageContext::for_threat(
                         &host,
                         "/",
@@ -445,7 +477,11 @@ impl ClearGateService {
                 threat_tier,
                 threat_blocked: if threat_blocked { Some(true) } else { None },
                 block_reason: Some(block_reason),
-                rule_name: matched_rule_name,
+                rule_name: if tld_blocked {
+                    Some(format!("RiskyTLD:.{blocked_tld_name}"))
+                } else {
+                    matched_rule_name
+                },
                 threat_signals,
                 dlp_matches: None,
             };

@@ -70,6 +70,8 @@ pub fn on_blocked_entry(entry: &LogEntry) {
                 conduit_common::types::BlockReason::ConnectionLimit => "Connection Limit",
                 conduit_common::types::BlockReason::DlpViolation => "DLP Data Loss Violation",
                 conduit_common::types::BlockReason::PackageMalware => "Malware in Package Archive",
+                conduit_common::types::BlockReason::PostProtection => "POST Protection Block",
+                conduit_common::types::BlockReason::RiskyTld => "Risky TLD Blocked",
             })
         })
         .unwrap_or("Blocked by Gateway");

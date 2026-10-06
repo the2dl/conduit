@@ -54,8 +54,11 @@ rm -f /etc/profile.d/conduit.sh /etc/sudoers.d/conduit-proxy /etc/apt/apt.conf.d
 
 for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc" "$REAL_HOME/.bash_profile" "$REAL_HOME/.profile"; do
   if [ -f "$rc" ]; then
-    sed -i '/# Conduit MITM security gateway proxy defaults/d' "$rc" 2>/dev/null || true
-    sed -i '/# Conduit Security Gateway Shell Proxy Environment/d' "$rc" 2>/dev/null || true
+    # Remove delimited blocks
+    sed -i '/# >>> conduit proxy >>>/,/# <<< conduit proxy <<</d' "$rc" 2>/dev/null || true
+    # Remove legacy multi-line blocks cleanly including their terminating fi
+    sed -i '/# Conduit Security Gateway Shell Proxy Environment/,/^[[:space:]]*fi[[:space:]]*$/d' "$rc" 2>/dev/null || true
+    sed -i '/# Conduit MITM security gateway proxy defaults/,/^[[:space:]]*fi[[:space:]]*$/d' "$rc" 2>/dev/null || true
     sed -i '/\/etc\/profile\.d\/conduit\.sh/d' "$rc" 2>/dev/null || true
     sed -i '/conduit\/scripts\/env\.sh/d' "$rc" 2>/dev/null || true
   fi

@@ -190,8 +190,14 @@ async fn run_logging_pipeline(
 
         // Track uncategorized domains for automated categorization
         if entry.category.as_deref() == Some("uncategorized") {
-            let host = entry.host.split(':').next().unwrap_or(&entry.host).to_lowercase();
-            if !host.is_empty() && host.parse::<std::net::IpAddr>().is_err() && host != "localhost" {
+            let host = entry
+                .host
+                .split(':')
+                .next()
+                .unwrap_or(&entry.host)
+                .to_lowercase();
+            if !host.is_empty() && host.parse::<std::net::IpAddr>().is_err() && host != "localhost"
+            {
                 let pool_c = pool.clone();
                 tokio::spawn(async move {
                     if let Ok(mut conn) = pool_c.get().await {

@@ -376,12 +376,14 @@ if [ "$INSTALL_MODE" = "system" ]; then
   echo "  Creating system directories (/etc/conduit, /var/lib/conduit, /var/log/conduit)..."
   $SUDO mkdir -p /usr/local/bin /etc/conduit /etc/conduit/ca /var/lib/conduit /var/lib/conduit/ui /var/log/conduit
 
+  # Stop running services before updating binaries to prevent "Text file busy"
+  $SUDO systemctl stop conduit-proxy.service conduit-api.service 2>/dev/null || true
+
   # Copy binaries
   echo "  Installing binaries to /usr/local/bin..."
-  $SUDO cp "$ROOT_DIR/target/release/conduit-api" /usr/local/bin/conduit-api
-  $SUDO cp "$ROOT_DIR/target/release/conduit-proxy" /usr/local/bin/conduit-proxy
-  $SUDO cp "$ROOT_DIR/scripts/conduit-ctl.sh" /usr/local/bin/conduit-ctl
-  $SUDO chmod 755 /usr/local/bin/conduit-api /usr/local/bin/conduit-proxy /usr/local/bin/conduit-ctl
+  $SUDO install -m 755 "$ROOT_DIR/target/release/conduit-api" /usr/local/bin/conduit-api
+  $SUDO install -m 755 "$ROOT_DIR/target/release/conduit-proxy" /usr/local/bin/conduit-proxy
+  $SUDO install -m 755 "$ROOT_DIR/scripts/conduit-ctl.sh" /usr/local/bin/conduit-ctl
 
   # Copy UI build
   echo "  Installing UI dashboard to /var/lib/conduit/ui..."
@@ -404,8 +406,8 @@ if [ "$INSTALL_MODE" = "system" ]; then
     fi
   else
     echo "  Preserving existing /etc/conduit/conduit.toml."
-    if ! grep -q "anthropic.com" /etc/conduit/conduit.toml 2>/dev/null && [ -f "$ROOT_DIR/conduit.toml" ]; then
-      echo "  Syncing AI assistant allowlist domains into /etc/conduit/conduit.toml..."
+    if ! grep -q "tld_protection" /etc/conduit/conduit.toml 2>/dev/null && [ -f "$ROOT_DIR/conduit.toml" ]; then
+      echo "  Syncing TLD & POST protection settings into /etc/conduit/conduit.toml..."
       $SUDO cp "$ROOT_DIR/conduit.toml" /etc/conduit/conduit.toml
       $SUDO sed -i 's|^#\? \?ca_cert_path = .*|ca_cert_path = "/etc/conduit/ca/ca.pem"|' /etc/conduit/conduit.toml
       $SUDO sed -i 's|^#\? \?ca_key_path = .*|ca_key_path = "/etc/conduit/ca/ca-key.pem"|' /etc/conduit/conduit.toml
@@ -433,10 +435,19 @@ if [ "$INSTALL_MODE" = "system" ]; then
   # Install systemd unit files
   echo "  Installing systemd system units (/etc/systemd/system/)..."
   $SUDO cp "$ROOT_DIR/deploy/systemd/system/"* /etc/systemd/system/
+  if [ -n "${REAL_USER:-}" ] && [ "$REAL_USER" != "root" ]; then
+    $SUDO sed -i "s|^User=.*|User=$REAL_USER|" /etc/systemd/system/conduit-api.service
+    $SUDO sed -i "s|^Group=.*|Group=$(id -gn "$REAL_USER")|" /etc/systemd/system/conduit-api.service
+    $SUDO sed -i "s|^Environment=HOME=.*|Environment=HOME=$REAL_HOME|" /etc/systemd/system/conduit-api.service
+    $SUDO sed -i "s|^Environment=USER=.*|Environment=USER=$REAL_USER|" /etc/systemd/system/conduit-api.service
+    $SUDO sed -i "s|^Environment=PATH=.*|Environment=PATH=$REAL_HOME/.local/share/mise/shims:$REAL_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin|" /etc/systemd/system/conduit-api.service
+    $SUDO sed -i "s|^ReadWritePaths=.*|ReadWritePaths=/var/lib/conduit /var/log/conduit /etc/conduit $REAL_HOME|" /etc/systemd/system/conduit-api.service
+  fi
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now conduit-api.service conduit-proxy.service conduit.target
+  $SUDO systemctl enable conduit-api.service conduit-proxy.service conduit.target
+  $SUDO systemctl restart conduit-api.service conduit-proxy.service conduit.target
 
-  echo "  Systemd system services enabled and started."
+  echo "  Systemd system services enabled and restarted."
 
 else
   echo ""
@@ -480,6 +491,38 @@ if [ "$API_READY" = true ]; then
   echo ""
 else
   echo " warning: API did not respond within 20 seconds. Check logs with 'conduit-ctl status'."
+fi
+
+echo -n "  Waiting for Conduit Proxy on :8888..."
+PROXY_READY=false
+for i in {1..40}; do
+  if (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null || nc -z 127.0.0.1 8888 2>/dev/null; then
+    PROXY_READY=true
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$PROXY_READY" = true ]; then
+  echo " online."
+else
+  echo " warning: Proxy did not respond on :8888 within 20 seconds."
+fi
+
+if [ "$API_READY" != true ] || [ "$PROXY_READY" != true ]; then
+  echo ""
+  echo "========================================================"
+  echo " WARNING: Conduit services are not fully operational yet!"
+  echo " API (8443):   $([ "$API_READY" = true ] && echo "ONLINE" || echo "FAILED")"
+  echo " Proxy (8888): $([ "$PROXY_READY" = true ] && echo "ONLINE" || echo "FAILED")"
+  echo ""
+  echo " Recent service logs:"
+  journalctl -u conduit-api.service -u conduit-proxy.service --no-pager -n 15 2>/dev/null || true
+  echo ""
+  echo " Disabling system-wide proxy activation to prevent network outage."
+  echo " Direct internet access remains unaffected."
+  echo "========================================================"
+  SYSTEM_PROXY=false
 fi
 
 # ── 9. Datastore Seeding ──────────────────────────────────────────────
@@ -536,6 +579,21 @@ if [ "$TRUST_CA" = true ]; then
       $SUDO cp "$CA_SOURCE" /etc/pki/ca-trust/source/anchors/conduit-ca.crt
       $SUDO update-ca-trust
       echo "  Installed into Fedora/RHEL trust store via update-ca-trust."
+    fi
+
+    # Generate combined CA bundle (system roots + Conduit CA) so CLI tools
+    # that override their trust store can verify both intercepted and bypassed domains
+    SYSTEM_CA_BUNDLE=""
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+      if [ -f "$f" ]; then
+        SYSTEM_CA_BUNDLE="$f"
+        break
+      fi
+    done
+    if [ -n "$SYSTEM_CA_BUNDLE" ]; then
+      cat "$SYSTEM_CA_BUNDLE" "$CA_SOURCE" | $SUDO tee /etc/conduit/ca/ca-bundle.pem >/dev/null 2>&1 || true
+      $SUDO chmod 644 /etc/conduit/ca/ca-bundle.pem 2>/dev/null || true
+      echo "  Generated combined CA bundle at /etc/conduit/ca/ca-bundle.pem."
     fi
 
     # Also update user NSS database for Chrome / Chromium if present
@@ -626,13 +684,27 @@ export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 export no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local"
 
 # CA Certificates for developer runtimes & CLIs (Node, Python, Git, OpenSSL, AWS)
-export CURL_CA_BUNDLE="/etc/conduit/ca/ca.pem"
-export SSL_CERT_FILE="/etc/conduit/ca/ca.pem"
-export REQUESTS_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+# Prefer combined bundle or system trust bundle (which includes Conduit CA + public internet roots).
+# This allows bypassed/allowlisted domains (e.g. *.googleapis.com, *.google.com) to verify
+# alongside Conduit-intercepted traffic.
+CA_BUNDLE="/etc/conduit/ca/ca-bundle.pem"
+if [ ! -f "$CA_BUNDLE" ]; then
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+        if [ -f "$f" ]; then
+            CA_BUNDLE="$f"
+            break
+        fi
+    done
+fi
+[ ! -f "$CA_BUNDLE" ] && CA_BUNDLE="/etc/conduit/ca/ca.pem"
+
+export CURL_CA_BUNDLE="$CA_BUNDLE"
+export SSL_CERT_FILE="$CA_BUNDLE"
+export REQUESTS_CA_BUNDLE="$CA_BUNDLE"
 export NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem"
-export GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem"
-export CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem"
-export AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+export GIT_SSL_CAINFO="$CA_BUNDLE"
+export CODEX_CA_CERTIFICATE="$CA_BUNDLE"
+export AWS_CA_BUNDLE="$CA_BUNDLE"
 
 # Node.js built-in fetch (undici) proxy support (Node 20.18+, 22.1+, 24+)
 if command -v node >/dev/null 2>&1 && node --use-env-proxy -e 'process.exit(0)' 2>/dev/null; then
@@ -648,13 +720,15 @@ EOF
   # Ensure user shell configuration files (~/.bashrc, ~/.zshrc) source Conduit proxy
   for rc in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
     if [ -f "$rc" ]; then
-      if ! grep -q "/etc/profile.d/conduit.sh" "$rc" && ! grep -q "scripts/env.sh" "$rc"; then
+      sed -i '/# Conduit Security Gateway Shell Proxy Environment/,/^[[:space:]]*fi[[:space:]]*$/d' "$rc" 2>/dev/null || true
+      if ! grep -q "conduit proxy" "$rc" && ! grep -q "/etc/profile.d/conduit.sh" "$rc" && ! grep -q "scripts/env.sh" "$rc"; then
         cat >> "$rc" << 'EOF'
 
-# Conduit Security Gateway Shell Proxy Environment
+# >>> conduit proxy >>>
 if [ -f /etc/profile.d/conduit.sh ]; then
   . /etc/profile.d/conduit.sh
 fi
+# <<< conduit proxy <<<
 EOF
         if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
           chown "$REAL_USER:$REAL_USER" "$rc"
@@ -667,7 +741,18 @@ EOF
   # Configure user environment defaults for GUI apps and Wayland/systemd session
   echo "  Configuring user desktop session and browser proxy flags..."
   mkdir -p "$REAL_HOME/.config/environment.d"
-  cat << 'EOF' > "$REAL_HOME/.config/environment.d/conduit.conf"
+  ENV_CA_BUNDLE="/etc/conduit/ca/ca-bundle.pem"
+  if [ ! -f "$ENV_CA_BUNDLE" ]; then
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+      if [ -f "$f" ]; then
+        ENV_CA_BUNDLE="$f"
+        break
+      fi
+    done
+  fi
+  [ ! -f "$ENV_CA_BUNDLE" ] && ENV_CA_BUNDLE="/etc/conduit/ca/ca.pem"
+
+  cat << EOF > "$REAL_HOME/.config/environment.d/conduit.conf"
 # Conduit Security Gateway User Environment
 http_proxy=http://127.0.0.1:8888
 https_proxy=http://127.0.0.1:8888
@@ -676,13 +761,13 @@ HTTPS_PROXY=http://127.0.0.1:8888
 ALL_PROXY=http://127.0.0.1:8888
 no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
 NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local
-CURL_CA_BUNDLE=/etc/conduit/ca/ca.pem
-SSL_CERT_FILE=/etc/conduit/ca/ca.pem
-REQUESTS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+CURL_CA_BUNDLE=$ENV_CA_BUNDLE
+SSL_CERT_FILE=$ENV_CA_BUNDLE
+REQUESTS_CA_BUNDLE=$ENV_CA_BUNDLE
 NODE_EXTRA_CA_CERTS=/etc/conduit/ca/ca.pem
-GIT_SSL_CAINFO=/etc/conduit/ca/ca.pem
-CODEX_CA_CERTIFICATE=/etc/conduit/ca/ca.pem
-AWS_CA_BUNDLE=/etc/conduit/ca/ca.pem
+GIT_SSL_CAINFO=$ENV_CA_BUNDLE
+CODEX_CA_CERTIFICATE=$ENV_CA_BUNDLE
+AWS_CA_BUNDLE=$ENV_CA_BUNDLE
 NODE_OPTIONS=--use-env-proxy
 EOF
   if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
@@ -709,15 +794,25 @@ EOF
 
   # Propagate into live systemd user and D-Bus session
   SET_ENV_CMD='
+    CA_BUNDLE="/etc/conduit/ca/ca-bundle.pem"
+    if [ ! -f "$CA_BUNDLE" ]; then
+      for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+        if [ -f "$f" ]; then
+          CA_BUNDLE="$f"
+          break
+        fi
+      done
+    fi
+    [ ! -f "$CA_BUNDLE" ] && CA_BUNDLE="/etc/conduit/ca/ca.pem"
     for v in http_proxy="http://127.0.0.1:8888" https_proxy="http://127.0.0.1:8888" \
              HTTP_PROXY="http://127.0.0.1:8888" HTTPS_PROXY="http://127.0.0.1:8888" \
              ALL_PROXY="http://127.0.0.1:8888" \
              no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local" \
              NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,.local,.internal,.svc,.cluster.local" \
-             CURL_CA_BUNDLE="/etc/conduit/ca/ca.pem" SSL_CERT_FILE="/etc/conduit/ca/ca.pem" \
-              REQUESTS_CA_BUNDLE="/etc/conduit/ca/ca.pem" NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem" \
-              GIT_SSL_CAINFO="/etc/conduit/ca/ca.pem" CODEX_CA_CERTIFICATE="/etc/conduit/ca/ca.pem" \
-              AWS_CA_BUNDLE="/etc/conduit/ca/ca.pem" NODE_OPTIONS="--use-env-proxy"; do
+             CURL_CA_BUNDLE="$CA_BUNDLE" SSL_CERT_FILE="$CA_BUNDLE" \
+             REQUESTS_CA_BUNDLE="$CA_BUNDLE" NODE_EXTRA_CA_CERTS="/etc/conduit/ca/ca.pem" \
+             GIT_SSL_CAINFO="$CA_BUNDLE" CODEX_CA_CERTIFICATE="$CA_BUNDLE" \
+             AWS_CA_BUNDLE="$CA_BUNDLE" NODE_OPTIONS="--use-env-proxy"; do
       systemctl --user set-environment "$v" 2>/dev/null || true
     done
     if command -v dbus-update-activation-environment >/dev/null 2>&1; then

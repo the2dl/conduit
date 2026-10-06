@@ -145,6 +145,7 @@ allowed_domains = [
     # AI Coding Assistants & APIs (Claude, ChatGPT, Codex)
     "*.anthropic.com",
     "*.claude.ai",
+    "*.claude.com",
     "*.openai.com",
     "*.chatgpt.com",
     "*.oaistatic.com",
@@ -183,13 +184,18 @@ hosts = [
     "34.136.148.92",
     "34.139.173.121",
     "35.190.142.72",
-    # AI Coding Assistants & APIs (Claude, ChatGPT, Codex)
+    # AI Coding Assistants & APIs (Claude, ChatGPT, Codex, Antigravity, Gemini)
     "*.anthropic.com",
     "*.claude.ai",
+    "*.claude.com",
     "*.openai.com",
     "*.chatgpt.com",
     "*.oaistatic.com",
     "*.oaiusercontent.com",
+    "*.goog",
+    "*.google.com",
+    "*.googleapis.com",
+    "*.googleusercontent.com",
 ]
 ports = [
     6443,
@@ -217,5 +223,48 @@ muted_domains = [
     "*.simpleanalyticscdn.com",
 ]
 
+# --- TLD Protection (High-Risk & Abused Top-Level Domains) ---
+[tld_protection]
+enabled = true
+action = "block"                       # "block" or "log" (audit mode)
+block_bad_tlds = true                  # Enforce block on known heavily abused TLDs (.tk, .ml, .ga, .zip, .top, .su, .pw, etc.)
+# Custom TLD blocklist (without leading dot)
+blocked_tlds = [
+    # High-Threat Nation-States & Cybercrime ccTLDs
+    "ru", "by", "su", "cn", "ir", "kp", "sy", "cu", "af", "iq",
+    "xn--p1ai", "xn--90ais",
+    # Deceptive & Executable Extension Mimicry
+    "zip", "mov",
+    # Classic Freenom / Disposable Abused ccTLDs
+    "tk", "ml", "ga", "cf", "gq", "pw", "cc", "ws", "vu", "la",
+    # Heavily Abused Phishing & Spam gTLDs (Spamhaus Top Abused)
+    "top", "xyz", "sbs", "cfd", "icu", "cyou", "buzz", "monster",
+    "cam", "bar", "rest", "fit", "surf", "work", "click", "loan",
+    "download", "racing", "win", "bid", "stream", "hair", "quest",
+    "boats", "beauty", "skin", "makeup", "date", "faith", "webcam",
+    "review", "trade", "party", "science", "bond", "host",
+]
+# Custom trusted TLDs to exempt or override known-bad status
+trusted_tlds = [
+    "com", "org", "net", "edu", "gov", "io", "dev", "app", "ai", "rs",
+]
 
-
+# --- POST & Write Protection for Uncategorized Domains ---
+# Enforces a read-only posture for unvetted long-tail domains to stop exfiltration and phishing submission
+[post_protection]
+enabled = true
+action = "block"                       # "block" or "log" (audit mode)
+# When true, only interactive browser sessions are restricted.
+# CLI / machine tools (curl, git, cargo, npm, pip, docker) are exempted.
+browser_only = true
+# Block state-changing requests (POST/PUT/PATCH/DELETE) to uncategorized domains on suspicious/untrusted TLDs
+block_uncategorized_bad_tld = true
+# Block write requests to uncategorized domains if Shannon entropy exceeds threshold (likely DGA/randomized)
+block_uncategorized_high_entropy = true
+entropy_threshold = 3.5
+# Maximum allowed payload size in bytes for uncategorized POSTs (default: 16KB).
+# Allows small search telemetry or autosaves (< 16KB) while preventing data exfiltration dumps.
+# Set to 0 to block all POST requests to uncategorized domains regardless of payload size.
+max_uncategorized_body_bytes = 16384
+# Additional custom User-Agent substrings to exempt
+exempt_user_agents = []

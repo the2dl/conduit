@@ -341,34 +341,65 @@ pub struct AutoCategorizeResult {
 }
 
 pub fn resolve_agent_command(agent: &str) -> Option<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dan".to_string());
-    let candidates = match agent {
-        "agy" => vec![
-            format!("{home}/.local/share/mise/installs/antigravity-cli/latest/agy"),
-            format!("{home}/.local/share/mise/shims/agy"),
-            format!("{home}/.local/bin/agy"),
-            "/usr/local/bin/agy".to_string(),
-            "/usr/bin/agy".to_string(),
-        ],
-        "codex" => vec![
-            format!("{home}/.local/share/mise/installs/codex/latest/bin/codex"),
-            format!("{home}/.local/share/mise/shims/codex"),
-            format!("{home}/.local/bin/codex"),
-            "/usr/local/bin/codex".to_string(),
-            "/usr/bin/codex".to_string(),
-        ],
-        "claude" => vec![
-            format!("{home}/.local/share/mise/installs/npm-anthropic-ai-claude-code/latest/node_modules/.bin/claude"),
-            format!("{home}/.local/share/mise/shims/claude"),
-            format!("{home}/.local/bin/claude"),
-            "/usr/local/bin/claude".to_string(),
-            "/usr/bin/claude".to_string(),
-        ],
-        _ => vec![],
-    };
+    let mut candidate_homes = Vec::new();
+    if let Ok(h) = std::env::var("HOME") {
+        if h != "/var/lib/conduit" && h != "/root" && !h.is_empty() {
+            candidate_homes.push(h);
+        }
+    }
+    if let Ok(h) = std::env::var("CONDUIT_USER_HOME") {
+        if !h.is_empty() {
+            candidate_homes.push(h);
+        }
+    }
+    // Also discover real user homes in /home
+    if let Ok(entries) = std::fs::read_dir("/home") {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    candidate_homes.push(entry.path().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    if candidate_homes.is_empty() {
+        candidate_homes.push("/home/dan".to_string());
+    }
 
-    for path_str in candidates {
-        let p = PathBuf::from(path_str);
+    for home in &candidate_homes {
+        let candidates = match agent {
+            "agy" => vec![
+                format!("{home}/.local/share/mise/installs/antigravity-cli/latest/agy"),
+                format!("{home}/.local/share/mise/shims/agy"),
+                format!("{home}/.local/bin/agy"),
+            ],
+            "codex" => vec![
+                format!("{home}/.local/share/mise/installs/codex/latest/bin/codex"),
+                format!("{home}/.local/share/mise/shims/codex"),
+                format!("{home}/.local/bin/codex"),
+            ],
+            "claude" => vec![
+                format!("{home}/.local/share/mise/installs/npm-anthropic-ai-claude-code/latest/node_modules/.bin/claude"),
+                format!("{home}/.local/share/mise/shims/claude"),
+                format!("{home}/.local/bin/claude"),
+            ],
+            _ => vec![],
+        };
+
+        for path_str in candidates {
+            let p = PathBuf::from(path_str);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    // Also check system PATH locations
+    for sys_path in &[
+        format!("/usr/local/bin/{agent}"),
+        format!("/usr/bin/{agent}"),
+    ] {
+        let p = PathBuf::from(sys_path);
         if p.is_file() {
             return Some(p);
         }
@@ -484,7 +515,7 @@ fn build_categorization_prompt(domains: &[(String, Option<String>)]) -> String {
     }
     let domain_list = domain_lines.join("\n");
     format!(
-r#"You are a domain categorizer. For each domain, output ONLY the domain and its category separated by a comma. One per line. No headers, no explanations, no extra text. Do not use any tools.
+        r#"You are a domain categorizer. For each domain, output ONLY the domain and its category separated by a comma. One per line. No headers, no explanations, no extra text. Do not use any tools.
 
 Categories: search_engine, social_media, news_media, shopping, banking_finance, email_messaging, streaming_entertainment, gaming, education, technology, government, healthcare, adult, advertising_tracking, cdn_infrastructure, vpn_proxy, telecom_isp, domain_hosting, crypto_blockchain, security_pki, travel_transport, jobs_freelance, reference, media_publishing, business_services, file_sharing, other
 
@@ -528,8 +559,12 @@ fn parse_categorization_output(
         if let Some((dom_raw, cat_raw)) = line.split_once(',') {
             let dom = dom_raw.trim().to_lowercase();
             let cat = cat_raw.trim().to_lowercase();
-            let dom = dom.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
-            let cat = cat.trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '.').to_string();
+            let dom = dom
+                .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+                .to_string();
+            let cat = cat
+                .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '.')
+                .to_string();
 
             if !dom.is_empty() && canonical.contains(cat.as_str()) {
                 found_domains.insert(dom.clone());
@@ -550,6 +585,7 @@ fn parse_categorization_output(
 }
 
 pub async fn run_agent_categorization(
+    state: &AppState,
     agent: &str,
     binary: &Path,
     domains: &[String],
@@ -558,14 +594,29 @@ pub async fn run_agent_categorization(
         return Ok((vec![], vec![]));
     }
 
+    let proxy_port = state
+        .config
+        .listen_addr
+        .rsplit(':')
+        .next()
+        .unwrap_or("8888");
+    let local_proxy = format!("http://127.0.0.1:{proxy_port}");
+    let proxy_url = std::env::var("https_proxy")
+        .or_else(|_| std::env::var("HTTPS_PROXY"))
+        .or_else(|_| std::env::var("http_proxy"))
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .unwrap_or(local_proxy);
+
     // Probe domain metadata concurrently (up to 2s timeout)
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(2000))
-        .no_proxy()
         .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .unwrap_or_default();
+        .redirect(reqwest::redirect::Policy::limited(3));
+
+    if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+        client_builder = client_builder.proxy(proxy);
+    }
+    let client = client_builder.build().unwrap_or_default();
 
     let probe_futures = domains.iter().map(|d| {
         let client = client.clone();
@@ -607,16 +658,35 @@ pub async fn run_agent_categorization(
         "{home}/.local/share/mise/shims:{home}/.local/bin:{home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:{current_path}"
     );
 
-    cmd.env_remove("http_proxy")
-        .env_remove("https_proxy")
-        .env_remove("HTTP_PROXY")
-        .env_remove("HTTPS_PROXY")
-        .env_remove("ALL_PROXY")
+    let ca_path = state.config.ca_cert_path();
+    let ca_path_str = ca_path.to_string_lossy();
+    let bundle_path = state.config.ca_bundle_path();
+    let bundle_path_str = bundle_path.to_string_lossy();
+
+    cmd.env("http_proxy", &proxy_url)
+        .env("https_proxy", &proxy_url)
+        .env("HTTP_PROXY", &proxy_url)
+        .env("HTTPS_PROXY", &proxy_url)
+        .env("ALL_PROXY", &proxy_url)
+        .env("NODE_OPTIONS", "--use-env-proxy")
         .env("HOME", &home)
         .env("USER", &user)
         .env("PATH", augmented_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    if bundle_path.exists() {
+        cmd.env("SSL_CERT_FILE", bundle_path_str.as_ref())
+            .env("REQUESTS_CA_BUNDLE", bundle_path_str.as_ref())
+            .env("CURL_CA_BUNDLE", bundle_path_str.as_ref())
+            .env("GIT_SSL_CAINFO", bundle_path_str.as_ref())
+            .env("CODEX_CA_CERTIFICATE", bundle_path_str.as_ref())
+            .env("AWS_CA_BUNDLE", bundle_path_str.as_ref());
+    }
+
+    if ca_path.exists() {
+        cmd.env("NODE_EXTRA_CA_CERTS", ca_path_str.as_ref());
+    }
 
     let output = tokio::time::timeout(Duration::from_secs(90), cmd.output())
         .await
@@ -681,7 +751,12 @@ pub async fn execute_auto_categorization(
     };
 
     if is_explicit_agent && binary_opt.is_none() {
-        return Err(anyhow::anyhow!("Agent executable not found for '{agent_name}'"));
+        return Ok(AutoCategorizeResult {
+            success: false,
+            agent_used: agent_name.clone(),
+            error: Some(format!("Agent executable not found for '{agent_name}'. Please ensure {agent_name} is installed and available in PATH.")),
+            ..Default::default()
+        });
     }
 
     // Determine domains to categorize
@@ -699,7 +774,11 @@ pub async fn execute_auto_categorization(
 
     let mut result = AutoCategorizeResult {
         success: true,
-        agent_used: if binary_opt.is_some() { agent_name.clone() } else { "none".to_string() },
+        agent_used: if binary_opt.is_some() {
+            agent_name.clone()
+        } else {
+            "none".to_string()
+        },
         ..Default::default()
     };
 
@@ -711,7 +790,9 @@ pub async fn execute_auto_categorization(
                 "Running agent categorization"
             );
 
-            match run_agent_categorization(&agent_name, &binary, &domains_to_categorize).await {
+            match run_agent_categorization(state, &agent_name, &binary, &domains_to_categorize)
+                .await
+            {
                 Ok((categorized_pairs, failed)) => {
                     if !categorized_pairs.is_empty() {
                         let mut pipe = redis::pipe();
@@ -754,10 +835,27 @@ pub async fn execute_auto_categorization(
 
     if should_sync_ut1 {
         info!("Fetching UT1 daily blacklist tarball");
-        let client = reqwest::Client::builder()
+        let proxy_port = state
+            .config
+            .listen_addr
+            .rsplit(':')
+            .next()
+            .unwrap_or("8888");
+        let local_proxy = format!("http://127.0.0.1:{proxy_port}");
+        let proxy_url = std::env::var("https_proxy")
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("http_proxy"))
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .unwrap_or(local_proxy);
+
+        let mut client_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
-            .no_proxy()
-            .build();
+            .danger_accept_invalid_certs(true);
+
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+            client_builder = client_builder.proxy(proxy);
+        }
+        let client = client_builder.build();
         match client {
             Ok(cli) => {
                 match cli
@@ -765,24 +863,24 @@ pub async fn execute_auto_categorization(
                     .send()
                     .await
                 {
-                    Ok(resp) if resp.status().is_success() => {
-                        match resp.bytes().await {
-                            Ok(bytes) => {
-                                match crate::routes::import::import_ut1_data(state, bytes.to_vec()).await {
-                                    Ok(stats) => {
-                                        result.ut1_imported = true;
-                                        result.ut1_domains = stats.total_domains;
-                                        let now = chrono::Utc::now().timestamp();
-                                        let _: Result<(), _> = conn.set(KEY_LAST_UT1_RUN, now).await;
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "UT1 import error during auto-categorize");
-                                    }
+                    Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                        Ok(bytes) => {
+                            match crate::routes::import::import_ut1_data(state, bytes.to_vec())
+                                .await
+                            {
+                                Ok(stats) => {
+                                    result.ut1_imported = true;
+                                    result.ut1_domains = stats.total_domains;
+                                    let now = chrono::Utc::now().timestamp();
+                                    let _: Result<(), _> = conn.set(KEY_LAST_UT1_RUN, now).await;
+                                }
+                                Err(e) => {
+                                    error!(error = %e, "UT1 import error during auto-categorize");
                                 }
                             }
-                            Err(e) => error!(error = %e, "Failed reading UT1 bytes"),
                         }
-                    }
+                        Err(e) => error!(error = %e, "Failed reading UT1 bytes"),
+                    },
                     Ok(resp) => error!(status = %resp.status(), "UT1 download returned non-200"),
                     Err(e) => error!(error = %e, "Failed to download UT1 tarball"),
                 }
@@ -819,21 +917,12 @@ pub fn spawn_auto_categorizer(state: Arc<AppState>) {
                 continue;
             }
 
-            let pending_count: usize = conn
-                .scard(keys::CATEGORIES_PENDING)
-                .await
-                .unwrap_or(0);
+            let pending_count: usize = conn.scard(keys::CATEGORIES_PENDING).await.unwrap_or(0);
 
             let now = chrono::Utc::now().timestamp();
-            let last_run: i64 = conn
-                .get(KEY_LAST_AUTO_RUN)
-                .await
-                .unwrap_or(0);
+            let last_run: i64 = conn.get(KEY_LAST_AUTO_RUN).await.unwrap_or(0);
 
-            let last_ut1: i64 = conn
-                .get(KEY_LAST_UT1_RUN)
-                .await
-                .unwrap_or(0);
+            let last_ut1: i64 = conn.get(KEY_LAST_UT1_RUN).await.unwrap_or(0);
 
             let elapsed = now.saturating_sub(last_run);
             let ut1_elapsed = now.saturating_sub(last_ut1);
@@ -848,14 +937,9 @@ pub fn spawn_auto_categorizer(state: Arc<AppState>) {
                     is_ut1_due,
                     "Triggering scheduled auto-categorization sweep"
                 );
-                let _ = execute_auto_categorization(
-                    &state,
-                    None,
-                    Some(is_ut1_due),
-                    Some(100),
-                    None,
-                )
-                .await;
+                let _ =
+                    execute_auto_categorization(&state, None, Some(is_ut1_due), Some(100), None)
+                        .await;
             }
         }
     });
@@ -872,10 +956,7 @@ async fn get_pending_categories(
         );
     };
 
-    let count: usize = conn
-        .scard(keys::CATEGORIES_PENDING)
-        .await
-        .unwrap_or(0);
+    let count: usize = conn.scard(keys::CATEGORIES_PENDING).await.unwrap_or(0);
 
     let limit = q.limit.unwrap_or(100).min(1000);
     let domains: Vec<String> = if count > 0 && limit > 0 {
@@ -891,7 +972,10 @@ async fn get_pending_categories(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!(PendingCategoriesResponse { count, domains })),
+        Json(serde_json::json!(PendingCategoriesResponse {
+            count,
+            domains
+        })),
     )
 }
 
@@ -918,19 +1002,19 @@ async fn trigger_auto_categorize(
     body: Option<Json<AutoCategorizeRequest>>,
 ) -> impl IntoResponse {
     let req = body.map(|Json(r)| r).unwrap_or_default();
-    match execute_auto_categorization(
-        &state,
-        req.agent,
-        req.sync_ut1,
-        req.limit,
-        req.domains,
-    )
-    .await
+    match execute_auto_categorization(&state, req.agent, req.sync_ut1, req.limit, req.domains).await
     {
         Ok(result) => (StatusCode::OK, Json(serde_json::json!(result))),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string(), "success": false })),
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": false,
+                "error": e.to_string(),
+                "categorized_count": 0,
+                "categorized": [],
+                "failed": [],
+                "agent_used": "none"
+            })),
         ),
     }
 }
@@ -972,8 +1056,17 @@ example-unknown.xyz,other
         let (results, failed) = parse_categorization_output(stdout, &requested);
         assert_eq!(results.len(), 5);
         assert!(failed.is_empty());
-        assert_eq!(results[0], ("clickhouse.com".to_string(), "technology".to_string()));
-        assert_eq!(results[1], ("dashboard.civo.com".to_string(), "domain_hosting".to_string()));
+        assert_eq!(
+            results[0],
+            ("clickhouse.com".to_string(), "technology".to_string())
+        );
+        assert_eq!(
+            results[1],
+            (
+                "dashboard.civo.com".to_string(),
+                "domain_hosting".to_string()
+            )
+        );
     }
 
     #[test]
@@ -994,7 +1087,10 @@ tokens used: 123
         ];
         let (results, failed) = parse_categorization_output(stdout, &requested);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], ("clickhouse.com".to_string(), "technology".to_string()));
+        assert_eq!(
+            results[0],
+            ("clickhouse.com".to_string(), "technology".to_string())
+        );
         assert_eq!(failed.len(), 2);
         assert!(failed.contains(&"invalid.test".to_string()));
         assert!(failed.contains(&"missing.test".to_string()));

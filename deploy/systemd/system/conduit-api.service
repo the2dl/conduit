@@ -6,13 +6,16 @@ Wants=valkey.service
 
 [Service]
 Type=simple
-User=conduit
-Group=conduit
+User=dan
+Group=dan
 WorkingDirectory=/var/lib/conduit
 UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 Environment=CONDUIT_CONFIG=/etc/conduit/conduit.toml
 Environment=RUST_LOG=info
-ExecStartPre=/usr/bin/bash -c 'for i in {1..50}; do (echo > /dev/tcp/127.0.0.1/6379 || nc -z 127.0.0.1 6379) 2>/dev/null && exit 0; sleep 0.2; done; exit 1'
+Environment=HOME=/home/dan
+Environment=USER=dan
+Environment=PATH=/home/dan/.local/share/mise/shims:/home/dan/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/bash -c 'PORT=$(sed -n "s/^[[:space:]]*dragonfly_url[[:space:]]*=[[:space:]]*\"redis:\\/\\/.*:\\([0-9]*\\)\".*/\\1/p" /etc/conduit/conduit.toml 2>/dev/null || echo 6380); [ -z "$PORT" ] && PORT=6380; for i in {1..50}; do (echo > "/dev/tcp/127.0.0.1/$PORT" || nc -z 127.0.0.1 "$PORT" || echo > /dev/tcp/127.0.0.1/6380 || echo > /dev/tcp/127.0.0.1/6379 || nc -z 127.0.0.1 6380 || nc -z 127.0.0.1 6379) 2>/dev/null && exit 0; sleep 0.2; done; exit 1'
 ExecStart=/usr/local/bin/conduit-api
 Restart=on-failure
 RestartSec=3
@@ -21,10 +24,8 @@ StandardError=journal
 
 # Security hardening
 ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/conduit /var/log/conduit /etc/conduit
+ReadWritePaths=/var/lib/conduit /var/log/conduit /etc/conduit /home/dan
 
 [Install]
 WantedBy=multi-user.target

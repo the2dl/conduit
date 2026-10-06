@@ -111,6 +111,15 @@ mod tests {
     fn test_generate_cert_ip_san() {
         let ca = CertAuthority::generate().unwrap();
         let gen = generate_cert("34.136.148.92", &ca).unwrap();
-        assert_eq!(gen.cert.subject_name().entries().next().unwrap().data().as_slice(), b"34.136.148.92");
+        assert_eq!(
+            gen.cert
+                .subject_name()
+                .entries()
+                .next()
+                .unwrap()
+                .data()
+                .as_slice(),
+            b"34.136.148.92"
+        );
     }
 }

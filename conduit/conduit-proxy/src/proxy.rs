@@ -241,6 +241,58 @@ impl ClearGateProxy {
         Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
     }
 
+    fn render_post_protection_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+        reason: &str,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+
+        let block_ctx = crate::block_page::BlockPageContext::for_post_protection(
+            &ctx.host,
+            path,
+            method,
+            reason,
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
+    }
+
+    fn render_risky_tld_block_page(
+        &self,
+        session: &Session,
+        ctx: &RequestContext,
+        tld: &str,
+    ) -> Bytes {
+        let method = session.req_header().method.as_str();
+        let node_name = crate::block_page::get_node_name(&self.config);
+        let user = ctx.identity.username.as_deref().unwrap_or("unknown");
+        let timestamp = ctx.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let path = if ctx.path.is_empty() { "/" } else { &ctx.path };
+
+        let block_ctx = crate::block_page::BlockPageContext::for_risky_tld(
+            &ctx.host,
+            path,
+            method,
+            tld,
+            Some(user),
+            &ctx.client_ip,
+            &timestamp,
+            &ctx.ref_id,
+            &node_name,
+        );
+        Bytes::from(block_ctx.render(self.config.block_page_html.as_deref()))
+    }
+
     /// Get timeout config values or defaults.
     fn connect_timeout(&self) -> std::time::Duration {
         let secs = self
@@ -531,7 +583,7 @@ impl ProxyHttp for ClearGateProxy {
         }
 
         // Category lookup
-        if !ctx.tls_intercepted {
+        if !ctx.tls_intercepted || ctx.category.is_none() {
             ctx.category = policy::categories::lookup_category(&self.pool, &ctx.host).await;
         }
 
@@ -586,6 +638,148 @@ impl ProxyHttp for ClearGateProxy {
                     ctx.block_reason = Some(BlockReason::Policy);
                     ctx.rule_name = Some("EgressPortRestriction".to_string());
                     return Ok(true);
+                }
+            }
+        }
+
+        // TLD Protection evaluation (skipped for allowlisted hosts)
+        if !is_allowlisted {
+            let tld_cfg = rt_cfg.effective_tld_protection(self.config.tld_protection.as_ref());
+            if tld_cfg.enabled {
+                let host_tld = crate::threat::heuristics::extract_tld(&ctx.host);
+                let is_known_bad = crate::threat::heuristics::is_bad_tld_name(host_tld);
+                if tld_cfg.is_tld_blocked(host_tld, is_known_bad) {
+                    let should_block = tld_cfg.action == "block" || rt_cfg.prevention_mode;
+                    if should_block {
+                        info!(host = %ctx.host, tld = host_tld, "Blocking request (risky TLD)");
+                        ctx.action = PolicyAction::Block;
+                        ctx.block_reason = Some(BlockReason::RiskyTld);
+                        ctx.rule_name = Some(format!("RiskyTLD:.{host_tld}"));
+                        let body = self.render_risky_tld_block_page(session, ctx, host_tld);
+                        let mut resp = ResponseHeader::build(403, Some(3))?;
+                        resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                        resp.insert_header("Content-Length", &body.len().to_string())?;
+                        resp.insert_header("Connection", "close")?;
+                        session.write_response_header(Box::new(resp), false).await?;
+                        session.write_response_body(Some(body), true).await?;
+                        ctx.response_status = 403;
+                        return Ok(true);
+                    } else {
+                        info!(host = %ctx.host, tld = host_tld, "Risky TLD detected in audit mode (not blocked)");
+                    }
+                }
+            }
+        }
+
+        // POST / Write Protection for uncategorized domains
+        let is_uncategorized =
+            ctx.category.is_none() || ctx.category.as_deref() == Some("uncategorized");
+        if !is_allowlisted && is_uncategorized {
+            let post_cfg = rt_cfg.effective_post_protection(self.config.post_protection.as_ref());
+            if post_cfg.enabled {
+                let req_method = &session.req_header().method;
+                let is_state_changing = req_method == Method::POST
+                    || req_method == Method::PUT
+                    || req_method == Method::PATCH
+                    || req_method == Method::DELETE;
+
+                if is_state_changing {
+                    let ua = session
+                        .req_header()
+                        .headers
+                        .get("user-agent")
+                        .and_then(|v| v.to_str().ok());
+                    let has_browser_fetch =
+                        session.req_header().headers.contains_key("sec-fetch-mode")
+                            || session.req_header().headers.contains_key("sec-fetch-dest")
+                            || session.req_header().headers.contains_key("sec-ch-ua");
+
+                    let applies_to_client = if post_cfg.browser_only {
+                        post_cfg.is_interactive_browser(ua, has_browser_fetch)
+                    } else {
+                        !post_cfg.is_exempt_client(ua)
+                    };
+
+                    if applies_to_client {
+                        let host_tld = crate::threat::heuristics::extract_tld(&ctx.host);
+                        let is_bad_tld = crate::threat::heuristics::is_bad_tld_name(host_tld);
+                        let is_untrusted_tld =
+                            !crate::threat::heuristics::is_trusted_tld_name(host_tld);
+                        let trigger_tld = post_cfg.block_uncategorized_bad_tld
+                            && (is_bad_tld || is_untrusted_tld);
+
+                        let domain_part = crate::threat::heuristics::domain_without_tld(&ctx.host);
+                        let entropy = crate::threat::entropy::shannon_entropy(domain_part);
+                        let trigger_entropy = post_cfg.block_uncategorized_high_entropy
+                            && entropy >= post_cfg.entropy_threshold;
+
+                        let content_len = session
+                            .req_header()
+                            .headers
+                            .get("content-length")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let trigger_size = post_cfg.max_uncategorized_body_bytes == 0
+                            || (content_len > post_cfg.max_uncategorized_body_bytes);
+
+                        let triggered_reason = if trigger_tld {
+                            Some(format!(
+                                "Uncategorized domain with suspicious TLD (.{host_tld})"
+                            ))
+                        } else if trigger_entropy {
+                            Some(format!("Uncategorized domain with high entropy ({entropy:.2} >= {threshold:.2})", threshold = post_cfg.entropy_threshold))
+                        } else if trigger_size && content_len > 0 {
+                            Some(format!("Request payload exceeds uncategorized limit ({content_len} > {limit} bytes)", limit = post_cfg.max_uncategorized_body_bytes))
+                        } else if post_cfg.max_uncategorized_body_bytes == 0 {
+                            Some(
+                                "Write requests to uncategorized domains are disallowed"
+                                    .to_string(),
+                            )
+                        } else {
+                            None
+                        };
+
+                        if let Some(reason_text) = triggered_reason {
+                            let should_block = post_cfg.action == "block" || rt_cfg.prevention_mode;
+                            if should_block {
+                                info!(
+                                    host = %ctx.host,
+                                    method = %req_method,
+                                    reason = %reason_text,
+                                    "Blocking write request to uncategorized domain"
+                                );
+                                ctx.action = PolicyAction::Block;
+                                ctx.block_reason = Some(BlockReason::PostProtection);
+                                ctx.rule_name = Some("PostProtection".to_string());
+                                let body = self.render_post_protection_block_page(
+                                    session,
+                                    ctx,
+                                    &reason_text,
+                                );
+                                let mut resp = ResponseHeader::build(403, Some(3))?;
+                                resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                                resp.insert_header("Content-Length", &body.len().to_string())?;
+                                resp.insert_header("Connection", "close")?;
+                                session.write_response_header(Box::new(resp), false).await?;
+                                session.write_response_body(Some(body), true).await?;
+                                ctx.response_status = 403;
+                                return Ok(true);
+                            } else {
+                                info!(
+                                    host = %ctx.host,
+                                    method = %req_method,
+                                    reason = %reason_text,
+                                    "Uncategorized POST detected in audit mode (not blocked)"
+                                );
+                            }
+                        } else if post_cfg.max_uncategorized_body_bytes > 0 {
+                            // If Content-Length header was omitted (e.g. chunked transfer),
+                            // arm streaming body limit enforcement in request_body_filter
+                            ctx.uncategorized_post_max_bytes =
+                                Some(post_cfg.max_uncategorized_body_bytes);
+                        }
+                    }
                 }
             }
         }
@@ -816,6 +1010,30 @@ impl ProxyHttp for ClearGateProxy {
                     return Err(
                         pingora_error::Error::new(pingora_error::ErrorType::HTTPStatus(413))
                             .more_context("Request body too large"),
+                    );
+                }
+            }
+
+            // Uncategorized POST body size limit enforcement (streaming/chunked)
+            if let Some(max_post_bytes) = ctx.uncategorized_post_max_bytes {
+                if ctx.request_body_accumulated > max_post_bytes {
+                    let reason_text = format!(
+                        "Request payload exceeds uncategorized limit (streamed > {max_post_bytes} bytes)"
+                    );
+                    let body = self.render_post_protection_block_page(session, ctx, &reason_text);
+                    let mut resp = ResponseHeader::build(403, Some(3))?;
+                    resp.insert_header("Content-Type", "text/html; charset=utf-8")?;
+                    resp.insert_header("Content-Length", &body.len().to_string())?;
+                    resp.insert_header("Connection", "close")?;
+                    session.write_response_header(Box::new(resp), false).await?;
+                    session.write_response_body(Some(body), true).await?;
+                    ctx.response_status = 403;
+                    ctx.action = PolicyAction::Block;
+                    ctx.block_reason = Some(BlockReason::PostProtection);
+                    ctx.rule_name = Some("PostProtection".to_string());
+                    return Err(
+                        pingora_error::Error::new(pingora_error::ErrorType::HTTPStatus(403))
+                            .more_context("POST payload exceeds limit for uncategorized domain"),
                     );
                 }
             }
@@ -1495,5 +1713,52 @@ mod tests {
                 || path.contains("/callback");
             assert!(!is_auth, "expected {path} to NOT be detected as auth path");
         }
+    }
+
+    #[test]
+    fn test_post_protection_evaluation_logic() {
+        use conduit_common::config::PostProtectionConfig;
+
+        let post_cfg = PostProtectionConfig {
+            enabled: true,
+            action: "block".into(),
+            browser_only: true,
+            block_uncategorized_bad_tld: true,
+            block_uncategorized_high_entropy: true,
+            entropy_threshold: 3.5,
+            max_uncategorized_body_bytes: 8192,
+            exempt_user_agents: vec![],
+        };
+
+        let browser_ua =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36";
+        let is_browser = post_cfg.is_interactive_browser(Some(browser_ua), true);
+        assert!(is_browser);
+
+        // Case 1: Bad TLD on uncategorized domain -> trigger
+        let host_bad_tld = "login-update.top";
+        let tld = crate::threat::heuristics::extract_tld(host_bad_tld);
+        let is_bad = crate::threat::heuristics::is_bad_tld_name(tld);
+        assert!(is_bad);
+
+        // Case 2: High entropy on uncategorized domain -> trigger
+        let host_dga = "x8k2m9p1q7r4w2.com";
+        let domain_part = crate::threat::heuristics::domain_without_tld(host_dga);
+        let entropy = crate::threat::entropy::shannon_entropy(domain_part);
+        assert!(entropy >= post_cfg.entropy_threshold);
+
+        // Case 3: Body size threshold -> trigger
+        let payload_size = 10000;
+        assert!(payload_size > post_cfg.max_uncategorized_body_bytes);
+
+        // Case 4: Normal low entropy domain on good TLD with small body -> allowed
+        let normal_host = "example.org";
+        let normal_domain = crate::threat::heuristics::domain_without_tld(normal_host);
+        let normal_entropy = crate::threat::entropy::shannon_entropy(normal_domain);
+        let normal_tld = crate::threat::heuristics::extract_tld(normal_host);
+        assert!(!crate::threat::heuristics::is_bad_tld_name(normal_tld));
+        assert!(normal_entropy < post_cfg.entropy_threshold);
+        let small_payload = 1024;
+        assert!(small_payload <= post_cfg.max_uncategorized_body_bytes);
     }
 }

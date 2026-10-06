@@ -382,6 +382,7 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             allowed_domains: vec![
                 "*.anthropic.com".into(),
                 "*.claude.ai".into(),
+                "*.claude.com".into(),
                 "*.openai.com".into(),
                 "*.chatgpt.com".into(),
                 "*.oaistatic.com".into(),
@@ -410,16 +411,6 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             ],
         },
         DlpRule {
-            id: "builtin-openai-key".into(),
-            name: "OpenAI API Key".into(),
-            regex: r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b".into(),
-            action: DlpRuleAction::Block,
-            enabled: true,
-            builtin: true,
-            hits: 0,
-            allowed_domains: vec![],
-        },
-        DlpRule {
             id: "builtin-anthropic-key".into(),
             name: "Anthropic API Key".into(),
             regex: r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b".into(),
@@ -427,7 +418,24 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
             enabled: true,
             builtin: true,
             hits: 0,
-            allowed_domains: vec![],
+            allowed_domains: vec![
+                "*.anthropic.com".into(),
+                "*.claude.ai".into(),
+                "*.claude.com".into(),
+            ],
+        },
+        DlpRule {
+            id: "builtin-openai-key".into(),
+            name: "OpenAI API Key".into(),
+            regex: r"\bsk-(?:(?:proj-|admin-|svcacct-)[a-zA-Z0-9_-]{32,}|[a-zA-Z0-9]{32,})\b".into(),
+            action: DlpRuleAction::Block,
+            enabled: true,
+            builtin: true,
+            hits: 0,
+            allowed_domains: vec![
+                "*.openai.com".into(),
+                "*.chatgpt.com".into(),
+            ],
         },
         DlpRule {
             id: "builtin-slack-token".into(),
@@ -477,7 +485,9 @@ pub async fn seed_builtins(pool: &Arc<deadpool_redis::Pool>) {
                             existing_rule.regex = rule.regex.clone();
                             rule_changed = true;
                         }
-                        if existing_rule.allowed_domains.is_empty() && !rule.allowed_domains.is_empty() {
+                        if existing_rule.allowed_domains.is_empty()
+                            && !rule.allowed_domains.is_empty()
+                        {
                             existing_rule.allowed_domains = rule.allowed_domains.clone();
                             rule_changed = true;
                         }

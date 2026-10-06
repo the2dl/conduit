@@ -138,6 +138,7 @@ fail_closed = true
 #     "us-central1-docker.pkg.dev",
 #     "*.anthropic.com",
 #     "*.claude.ai",
+#     "*.claude.com",
 #     "*.openai.com",
 #     "*.chatgpt.com",
 # ]
@@ -173,8 +174,12 @@ fail_closed = true
 #     "10.0.0.0/8",                       # Internal private cluster CIDR
 #     "mtalk.google.com",                  # Google FCM push notifications on port 5228-5230
 #     "accounts.google.com",               # Google OAuth/auth (bypass MITM to avoid cert-pinning issues)
+#     "*.goog",                           # Google & Antigravity services
+#     "*.google.com",
+#     "*.googleapis.com",
 #     "*.anthropic.com",                  # Claude / Anthropic API & subagents
 #     "*.claude.ai",
+#     "*.claude.com",
 #     "*.openai.com",                     # OpenAI / ChatGPT / Codex
 #     "*.chatgpt.com",
 #     "localhost:8443",                    # Explicit host:port overrides default port blocks
@@ -198,4 +203,28 @@ fail_closed = true
 #     "*.datadoghq.com",
 # ]
 
+# --- TLD Protection (High-Risk & Abused Top-Level Domains) ---
+# [tld_protection]
+# enabled = true
+# action = "block"                       # "block" or "log" (audit mode)
+# block_bad_tlds = true                  # Enforce block on known heavily abused TLDs (.tk, .ml, .ga, .zip, .top, .su, .pw, etc.)
+# blocked_tlds = [
+#     "ru", "by", "su", "cn", "ir", "kp", "sy", "cu", "af", "iq", "xn--p1ai", "xn--90ais",
+#     "zip", "mov", "tk", "ml", "ga", "cf", "gq", "pw", "cc", "ws", "vu", "la",
+#     "top", "xyz", "sbs", "cfd", "icu", "cyou", "buzz", "monster", "cam", "bar",
+#     "rest", "fit", "surf", "work", "click", "loan", "download", "racing", "win",
+#     "bid", "stream", "hair", "quest", "boats", "beauty", "skin", "makeup", "date",
+#     "faith", "webcam", "review", "trade", "party", "science", "bond", "host",
+# ]
+# trusted_tlds = ["com", "org", "net", "io", "dev", "app", "ai", "rs"]
 
+# --- POST & Write Protection for Uncategorized Domains ---
+# [post_protection]
+# enabled = true
+# action = "block"                       # "block" or "log" (audit mode)
+# browser_only = true                  # When true, CLI tools (curl, git, cargo, npm) are exempt
+# block_uncategorized_bad_tld = true   # Block POST to uncategorized if TLD is suspicious/untrusted
+# block_uncategorized_high_entropy = true # Block POST to uncategorized if Shannon entropy exceeds threshold
+# entropy_threshold = 3.5
+# max_uncategorized_body_bytes = 16384 # 16KB limit (0 = block all POST to uncategorized)
+# exempt_user_agents = []

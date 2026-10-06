@@ -57,10 +57,10 @@ static TRUSTED_TLDS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|
         "fm",
         "tv",
         "gg",
-        "cc",
         "ly",
         "to",
         "im",
+        "rs",
         "it",
         "es",
         "pt",
@@ -73,6 +73,13 @@ static TRUSTED_TLDS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|
         "biz",
         "name",
         "museum",
+        // Major cloud & tech brand TLDs
+        "goog",
+        "google",
+        "gle",
+        "aws",
+        "apple",
+        "page",
         "coop",
         // Tech / cloud
         "cloud",
@@ -146,6 +153,55 @@ static BAD_TLDS: Lazy<HashMap<&'static str, f32>> = Lazy::new(|| {
     m.insert("hair", 0.4);
     m.insert("quest", 0.4);
     m.insert("boats", 0.4);
+    // Adversarial / cybercrime-heavy ccTLDs & IDNs
+    m.insert("ru", 0.7);
+    m.insert("by", 0.7);
+    m.insert("su", 0.8);
+    m.insert("cn", 0.6);
+    m.insert("ir", 0.7);
+    m.insert("kp", 0.8);
+    m.insert("sy", 0.7);
+    m.insert("cu", 0.7);
+    m.insert("af", 0.6);
+    m.insert("iq", 0.6);
+    m.insert("xn--p1ai", 0.7); // .рф (Russian Cyrillic IDN)
+    m.insert("xn--90ais", 0.7); // .бел (Belarusian Cyrillic IDN)
+                                // Abused island and offshore ccTLDs
+    m.insert("cc", 0.5);
+    m.insert("pw", 0.6);
+    m.insert("ws", 0.6);
+    m.insert("vu", 0.6);
+    m.insert("vg", 0.5);
+    m.insert("pn", 0.5);
+    m.insert("la", 0.5);
+    m.insert("ms", 0.5);
+    m.insert("cx", 0.5);
+    // Modern high-abuse spam & phishing gTLDs (Spamhaus / Unit 42)
+    m.insert("monster", 0.6);
+    m.insert("cam", 0.6);
+    m.insert("bar", 0.5);
+    m.insert("lat", 0.5);
+    m.insert("tokyo", 0.4);
+    m.insert("beauty", 0.6);
+    m.insert("skin", 0.6);
+    m.insert("makeup", 0.6);
+    m.insert("date", 0.6);
+    m.insert("faith", 0.6);
+    m.insert("webcam", 0.6);
+    m.insert("review", 0.5);
+    m.insert("accountant", 0.5);
+    m.insert("cricket", 0.5);
+    m.insert("party", 0.5);
+    m.insert("science", 0.5);
+    m.insert("trade", 0.5);
+    m.insert("homes", 0.5);
+    m.insert("autos", 0.5);
+    m.insert("motorcycles", 0.5);
+    m.insert("yachts", 0.5);
+    m.insert("bond", 0.6);
+    m.insert("uno", 0.5);
+    m.insert("host", 0.4);
+    m.insert("press", 0.4);
     m
 });
 
@@ -182,7 +238,8 @@ static SUSPICIOUS_PATHS: Lazy<RegexSet> = Lazy::new(|| {
 
 /// Map of Unicode characters to their ASCII confusable equivalents.
 fn normalize_confusables(s: &str) -> String {
-    s.nfkd()
+    s.to_lowercase()
+        .nfkd()
         .map(|c| match c {
             '\u{0430}' => 'a', // Cyrillic а
             '\u{0435}' => 'e', // Cyrillic е
@@ -196,13 +253,16 @@ fn normalize_confusables(s: &str) -> String {
             '\u{04BB}' => 'h', // Cyrillic һ
             '\u{0501}' => 'd', // Cyrillic ԁ
             '\u{051B}' => 'q', // Cyrillic ԛ
-            '0' => 'o',
-            '1' => 'l',
+            '\u{03BF}' => 'o', // Greek omicron
+            '\u{03B1}' => 'a', // Greek alpha
+            '\u{03C1}' => 'p', // Greek rho
+            '\u{03BD}' => 'v', // Greek nu
+            '\u{03BA}' => 'k', // Greek kappa
+            '\u{03B9}' => 'i', // Greek iota
+            '\u{03B5}' => 'e', // Greek epsilon
             _ => c,
         })
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect::<String>()
-        .to_ascii_lowercase()
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +270,7 @@ fn normalize_confusables(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Extract the registrable domain label (SLD without TLD) for entropy analysis.
-fn domain_without_tld(host: &str) -> &str {
+pub fn domain_without_tld(host: &str) -> &str {
     let host = host.strip_suffix('.').unwrap_or(host);
     let parts: Vec<&str> = host.split('.').collect();
     if parts.len() >= 3 {
@@ -229,7 +289,7 @@ fn domain_without_tld(host: &str) -> &str {
 }
 
 /// Extract the TLD from a host.
-fn extract_tld(host: &str) -> &str {
+pub fn extract_tld(host: &str) -> &str {
     let host = host.strip_suffix('.').unwrap_or(host);
     match host.rsplit_once('.') {
         Some((_rest, tld)) => tld,
@@ -351,11 +411,12 @@ pub fn unusual_port(port: u16) -> Vec<ThreatSignal> {
 }
 
 /// Domain-agnostic mixed-script / confusable character detection.
-/// Flags any domain containing Unicode confusables (Cyrillic lookalikes, digit substitutions)
+/// Flags any domain containing Unicode confusables (Cyrillic/Greek lookalikes)
 /// regardless of which brand it might be targeting.
 pub fn mixed_script_check(host: &str) -> Vec<ThreatSignal> {
+    let host_lower = host.to_lowercase();
     let normalized = normalize_confusables(host);
-    if normalized != host.to_ascii_lowercase() {
+    if normalized != host_lower {
         // Domain contains confusable characters
         return vec![ThreatSignal {
             name: "mixed_script".into(),
@@ -607,12 +668,24 @@ const WEIGHT_UNCATEGORIZED: f32 = 0.10;
 
 /// Check whether a TLD is in the trusted set.
 pub fn is_trusted_tld(host: &str) -> bool {
-    TRUSTED_TLDS.contains(extract_tld(host))
+    is_trusted_tld_name(extract_tld(host))
+}
+
+/// Check whether a raw TLD string is in the trusted set.
+pub fn is_trusted_tld_name(tld: &str) -> bool {
+    let tld = tld.strip_prefix('.').unwrap_or(tld);
+    TRUSTED_TLDS.contains(tld)
 }
 
 /// Check whether a TLD is in the known-bad set.
 pub fn is_bad_tld(host: &str) -> bool {
-    BAD_TLDS.contains_key(extract_tld(host))
+    is_bad_tld_name(extract_tld(host))
+}
+
+/// Check whether a raw TLD string is in the known-bad set.
+pub fn is_bad_tld_name(tld: &str) -> bool {
+    let tld = tld.strip_prefix('.').unwrap_or(tld);
+    BAD_TLDS.contains_key(tld)
 }
 
 /// TLS certificate metadata extracted from upstream handshake.
@@ -976,12 +1049,19 @@ mod tests {
 
     #[test]
     fn mixed_script_detection() {
-        // g00gle.com has digit substitutions (0→o) which normalize differently
-        let sigs = mixed_script_check("g00gle.com");
+        // Cyrillic 'о' (\u{043E}) lookalike in google.com
+        let sigs = mixed_script_check("g\u{043E}\u{043E}gle.com");
         assert!(
             !sigs.is_empty(),
-            "should detect g00gle.com as mixed-script confusable"
+            "should detect Cyrillic lookalike as mixed-script confusable"
         );
+        // Greek 'ο' (\u{03BF}) lookalike
+        assert!(!mixed_script_check("g\u{03BF}\u{03BF}gle.com").is_empty());
+
+        // Legitimate domains with digits must NOT trigger mixed-script
+        assert!(mixed_script_check("productionresultssa0.blob.core.windows.net").is_empty());
+        assert!(mixed_script_check("g00gle.com").is_empty());
+        assert!(mixed_script_check("aws-east-1.amazonaws.com").is_empty());
     }
 
     #[test]
@@ -1004,6 +1084,7 @@ mod tests {
         assert!(tld_risk("example.dev").is_empty());
         assert!(tld_risk("example.app").is_empty());
         assert!(tld_risk("example.co").is_empty());
+        assert!(tld_risk("antigravity-unleash.goog").is_empty());
     }
 
     #[test]
@@ -1016,6 +1097,34 @@ mod tests {
             "unknown TLD should be mild, got {}",
             sigs[0].score
         );
+    }
+
+    #[test]
+    fn tld_bad_expanded() {
+        assert!(is_bad_tld("malware.cc"));
+        assert!(is_bad_tld("phish.su"));
+        assert!(is_bad_tld("c2.pw"));
+        assert!(is_bad_tld("scam.monster"));
+        assert!(is_bad_tld("exploit.cam"));
+        assert!(is_bad_tld("botnet.ru"));
+        assert!(is_bad_tld("stealer.by"));
+        assert!(is_bad_tld("spam.cn"));
+        assert!(is_bad_tld("phish.xn--p1ai"));
+        assert!(is_bad_tld_name("cc"));
+        assert!(is_bad_tld_name("su"));
+        assert!(is_bad_tld_name("ru"));
+        assert!(is_bad_tld_name("cn"));
+        assert!(!is_trusted_tld("malware.cc"));
+        assert!(!is_trusted_tld("botnet.ru"));
+        assert!(is_trusted_tld("docs.rs"));
+    }
+
+    #[test]
+    fn domain_and_tld_extraction() {
+        assert_eq!(extract_tld("example.com"), "com");
+        assert_eq!(extract_tld("sub.domain.co.uk"), "uk");
+        assert_eq!(domain_without_tld("google.com"), "google");
+        assert_eq!(domain_without_tld("sub.google.co.uk"), "google");
     }
 
     #[test]

@@ -170,11 +170,25 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    // Serve static SvelteKit UI files if configured
-    if let Some(ref ui_dir) = state.config.ui_dir {
+    // Serve static SvelteKit UI files if configured (or fallback to standard paths)
+    let candidates = [
+        state.config.ui_dir.as_deref(),
+        Some("/var/lib/conduit/ui"),
+        Some("./conduit-ui/build"),
+    ];
+
+    let valid_ui_dir = candidates.into_iter().flatten().find(|dir| {
+        let p = std::path::Path::new(dir);
+        p.is_dir() && p.join("index.html").is_file()
+    });
+
+    if let Some(ui_dir) = valid_ui_dir {
+        info!(ui_dir, "Serving dashboard UI");
         let index = format!("{}/index.html", ui_dir);
         let serve_dir = ServeDir::new(ui_dir).fallback(ServeFile::new(&index));
         router = router.fallback_service(serve_dir);
+    } else {
+        tracing::warn!("No valid UI build directory with index.html found; dashboard UI disabled");
     }
 
     router

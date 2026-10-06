@@ -25,6 +25,18 @@ const ALLOWED_CONFIG_KEYS: &[&str] = &[
     "auto_categorize_enabled",
     "auto_categorize_agent",
     "auto_categorize_ut1",
+    "tld_protection_enabled",
+    "tld_protection_action",
+    "tld_block_bad_tlds",
+    "tld_blocked_list",
+    "tld_trusted_list",
+    "post_protection_enabled",
+    "post_protection_action",
+    "post_browser_only",
+    "post_block_uncategorized_bad_tld",
+    "post_block_uncategorized_high_entropy",
+    "post_entropy_threshold",
+    "post_max_uncategorized_body_bytes",
 ];
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -60,6 +72,42 @@ async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     config
         .entry("auto_categorize_ut1".into())
         .or_insert_with(|| "true".into());
+    config
+        .entry("tld_protection_enabled".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("tld_protection_action".into())
+        .or_insert_with(|| "block".into());
+    config
+        .entry("tld_block_bad_tlds".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("tld_blocked_list".into())
+        .or_insert_with(|| "".into());
+    config
+        .entry("tld_trusted_list".into())
+        .or_insert_with(|| "".into());
+    config
+        .entry("post_protection_enabled".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("post_protection_action".into())
+        .or_insert_with(|| "block".into());
+    config
+        .entry("post_browser_only".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("post_block_uncategorized_bad_tld".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("post_block_uncategorized_high_entropy".into())
+        .or_insert_with(|| "true".into());
+    config
+        .entry("post_entropy_threshold".into())
+        .or_insert_with(|| "3.5".into());
+    config
+        .entry("post_max_uncategorized_body_bytes".into())
+        .or_insert_with(|| "16384".into());
     (StatusCode::OK, Json(serde_json::json!(config)))
 }
 

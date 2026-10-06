@@ -106,6 +106,12 @@ pub struct ClearGateConfig {
     /// Desktop notification and alert suppression configuration.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
+    /// Top-Level Domain (TLD) protection policy.
+    #[serde(default)]
+    pub tld_protection: Option<TldProtectionConfig>,
+    /// POST and state-changing request protection for uncategorized domains.
+    #[serde(default)]
+    pub post_protection: Option<PostProtectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,6 +359,8 @@ impl Default for ClearGateConfig {
             allowlist: None,
             egress: None,
             notifications: None,
+            tld_protection: None,
+            post_protection: None,
         }
     }
 }
@@ -783,6 +791,216 @@ impl NotificationsConfig {
     }
 }
 
+/// Top-Level Domain (TLD) protection policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TldProtectionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_block_action")]
+    pub action: String, // "block" or "log"
+    /// When true, destinations on known-bad TLDs are blocked outright.
+    #[serde(default = "default_true")]
+    pub block_bad_tlds: bool,
+    /// Additional custom blocked TLDs configured by administrator (without leading dots, e.g. "top", "xyz").
+    #[serde(default)]
+    pub blocked_tlds: Vec<String>,
+    /// Custom trusted/exempt TLDs that override the known-bad list.
+    #[serde(default)]
+    pub trusted_tlds: Vec<String>,
+}
+
+fn default_block_action() -> String {
+    "block".into()
+}
+
+impl Default for TldProtectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            action: default_block_action(),
+            block_bad_tlds: true,
+            blocked_tlds: Vec::new(),
+            trusted_tlds: Vec::new(),
+        }
+    }
+}
+
+impl TldProtectionConfig {
+    /// Determine whether a given TLD is considered blocked under this policy.
+    pub fn is_tld_blocked(&self, tld: &str, is_known_bad: bool) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let tld_clean = tld.strip_prefix('.').unwrap_or(tld).to_ascii_lowercase();
+        // Explicit trusted override
+        if self
+            .trusted_tlds
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(&tld_clean))
+        {
+            return false;
+        }
+        // Explicit admin blocked list
+        if self
+            .blocked_tlds
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(&tld_clean))
+        {
+            return true;
+        }
+        if self.block_bad_tlds && is_known_bad {
+            return true;
+        }
+        false
+    }
+}
+
+/// Protection against data exfiltration and credential theft via state-changing requests (POST/PUT/PATCH).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostProtectionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_block_action")]
+    pub action: String, // "block" or "log"
+    /// When true, only interactive browser sessions are subject to POST gating.
+    /// Developer/CLI tools (git, cargo, npm, pip, curl, docker) are exempted.
+    #[serde(default = "default_true")]
+    pub browser_only: bool,
+    /// Block POST/PUT to uncategorized domains if the domain uses a suspicious/bad TLD.
+    #[serde(default = "default_true")]
+    pub block_uncategorized_bad_tld: bool,
+    /// Block POST/PUT to uncategorized domains if Shannon entropy exceeds the threshold.
+    #[serde(default = "default_true")]
+    pub block_uncategorized_high_entropy: bool,
+    /// Shannon entropy threshold for uncategorized domain flagging (default 3.2).
+    #[serde(default = "default_entropy_threshold")]
+    pub entropy_threshold: f32,
+    /// Maximum allowed body size (bytes) for uncategorized POSTs (default 16384 / 16KB).
+    /// Allows small search pings and telemetry (< 16KB) while stopping bulk exfiltration.
+    /// Set to 0 to block all POST bodies to uncategorized domains.
+    #[serde(default = "default_max_uncategorized_body")]
+    pub max_uncategorized_body_bytes: usize,
+    /// Custom User-Agent substrings/patterns exempt from POST gating.
+    #[serde(default)]
+    pub exempt_user_agents: Vec<String>,
+}
+
+fn default_entropy_threshold() -> f32 {
+    3.5
+}
+
+fn default_max_uncategorized_body() -> usize {
+    16_384 // 16 KB
+}
+
+impl Default for PostProtectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            action: default_block_action(),
+            browser_only: true,
+            block_uncategorized_bad_tld: true,
+            block_uncategorized_high_entropy: true,
+            entropy_threshold: default_entropy_threshold(),
+            max_uncategorized_body_bytes: default_max_uncategorized_body(),
+            exempt_user_agents: Vec::new(),
+        }
+    }
+}
+
+impl PostProtectionConfig {
+    /// Check whether a user agent or header indicates a developer CLI / machine tool.
+    pub fn is_exempt_client(&self, user_agent: Option<&str>) -> bool {
+        let ua = match user_agent {
+            Some(u) if !u.is_empty() => u,
+            _ => return false,
+        };
+
+        // Check custom exemptions
+        for pattern in &self.exempt_user_agents {
+            if ua
+                .to_ascii_lowercase()
+                .contains(&pattern.to_ascii_lowercase())
+            {
+                return true;
+            }
+        }
+
+        let ua_lower = ua.to_ascii_lowercase();
+
+        // Developer CLI tools and machine clients to exempt
+        const CLI_CLIENTS: &[&str] = &[
+            "curl/",
+            "wget/",
+            "git/",
+            "cargo/",
+            "rustup/",
+            "npm/",
+            "node/",
+            "pnpm/",
+            "yarn/",
+            "pip/",
+            "python-requests",
+            "aiohttp",
+            "httpx",
+            "docker/",
+            "containerd/",
+            "kubectl/",
+            "helm/",
+            "terraform/",
+            "packer/",
+            "ansible/",
+            "go-http-client",
+            "github-actions",
+            "gh/",
+            "postman",
+            "insomnia",
+            "datadog",
+            "prometheus",
+        ];
+
+        for client in CLI_CLIENTS {
+            if ua_lower.contains(client) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check whether the request signature matches an interactive browser.
+    pub fn is_interactive_browser(
+        &self,
+        user_agent: Option<&str>,
+        has_browser_fetch_headers: bool,
+    ) -> bool {
+        if self.is_exempt_client(user_agent) {
+            return false;
+        }
+
+        if has_browser_fetch_headers {
+            return true;
+        }
+
+        if let Some(ua) = user_agent {
+            let ua_lower = ua.to_ascii_lowercase();
+            if ua_lower.contains("mozilla/")
+                && (ua_lower.contains("chrome/")
+                    || ua_lower.contains("safari/")
+                    || ua_lower.contains("firefox/")
+                    || ua_lower.contains("edg/")
+                    || ua_lower.contains("opera/"))
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 /// Check if a domain matches a wildcard pattern (*.example.com, .example.com, or exact).
 pub fn matches_domain_pattern(pattern: &str, domain: &str) -> bool {
     let p = pattern.trim().to_ascii_lowercase();
@@ -1073,6 +1291,21 @@ impl ClearGateConfig {
             .clone()
             .unwrap_or_else(|| PathBuf::from("cleargate-ca-key.pem"))
     }
+
+    pub fn ca_bundle_path(&self) -> PathBuf {
+        for candidate in [
+            PathBuf::from("/etc/conduit/ca/ca-bundle.pem"),
+            PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
+            PathBuf::from("/etc/pki/tls/certs/ca-bundle.crt"),
+            PathBuf::from("/etc/ssl/ca-bundle.pem"),
+            PathBuf::from("/etc/ssl/cert.pem"),
+        ] {
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+        self.ca_cert_path()
+    }
 }
 
 #[cfg(test)]
@@ -1202,5 +1435,75 @@ mod tests {
         assert!(dlp.is_domain_allowed("docker.pkg.dev"));
         assert!(dlp.is_domain_allowed("registry.npmjs.org"));
         assert!(!dlp.is_domain_allowed("evil-exfil.com"));
+    }
+
+    #[test]
+    fn test_tld_protection_rules() {
+        let tld_cfg = TldProtectionConfig {
+            enabled: true,
+            action: "block".into(),
+            block_bad_tlds: true,
+            blocked_tlds: vec!["custombad".into()],
+            trusted_tlds: vec!["customgood".into()],
+        };
+
+        // Known bad blocked
+        assert!(tld_cfg.is_tld_blocked("tk", true));
+        assert!(tld_cfg.is_tld_blocked(".tk", true));
+        // Admin blocked
+        assert!(tld_cfg.is_tld_blocked("custombad", false));
+        // Trusted override over known bad
+        assert!(!tld_cfg.is_tld_blocked("customgood", true));
+        // Normal TLD not blocked
+        assert!(!tld_cfg.is_tld_blocked("com", false));
+    }
+
+    #[test]
+    fn test_post_protection_browser_and_cli_detection() {
+        let post_cfg = PostProtectionConfig::default();
+
+        // Standard browser UA + Sec-Fetch headers
+        assert!(post_cfg.is_interactive_browser(
+            Some("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+            true
+        ));
+        // Standard Firefox UA
+        assert!(post_cfg.is_interactive_browser(
+            Some("Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"),
+            false
+        ));
+
+        // CLI tools should be exempt
+        assert!(!post_cfg.is_interactive_browser(Some("curl/8.4.0"), false));
+        assert!(!post_cfg.is_interactive_browser(Some("git/2.43.0"), false));
+        assert!(!post_cfg.is_interactive_browser(Some("cargo/1.75.0"), false));
+        assert!(!post_cfg.is_interactive_browser(Some("npm/10.2.4 node/v20.10.0 linux x64"), false));
+        assert!(!post_cfg.is_interactive_browser(Some("python-requests/2.31.0"), false));
+        assert!(!post_cfg.is_interactive_browser(Some("Docker-Client/24.0.7 (linux)"), false));
+
+        assert!(post_cfg.is_exempt_client(Some("curl/8.4.0")));
+        assert!(post_cfg.is_exempt_client(Some("git/2.43.0")));
+        assert!(!post_cfg.is_exempt_client(Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")));
+    }
+
+    #[test]
+    fn test_parse_full_conduit_toml_configs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let conduit_toml = root.join("conduit.toml");
+        if conduit_toml.exists() {
+            let cfg = ClearGateConfig::from_file(conduit_toml.to_str().unwrap())
+                .expect("conduit.toml should parse");
+            assert!(cfg.tld_protection.is_some());
+            assert!(cfg.post_protection.is_some());
+        }
+        let example_toml = root.join("conduit.example.toml");
+        if example_toml.exists() {
+            let _cfg = ClearGateConfig::from_file(example_toml.to_str().unwrap())
+                .expect("conduit.example.toml should parse");
+        }
     }
 }

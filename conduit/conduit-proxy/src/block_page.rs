@@ -224,6 +224,80 @@ impl<'a> BlockPageContext<'a> {
         }
     }
 
+    /// Factory for POST / Write protection blocks on uncategorized domains.
+    pub fn for_post_protection(
+        host: &'a str,
+        path: &'a str,
+        method: &'a str,
+        reason: &'a str,
+        user: Option<&'a str>,
+        client_ip: &'a str,
+        timestamp: &'a str,
+        ref_id: &'a str,
+        node: &'a str,
+    ) -> Self {
+        Self {
+            reason_type: "policy",
+            eyebrow: "Data Protection / Outbound Restriction",
+            title: "Write request blocked to unverified domain",
+            message: "Conduit blocked this state-changing request (POST/PUT) because the destination domain is unverified/uncategorized and triggered outbound data protection policies. Read-only browsing (GET) may still be permitted.",
+            method: if method.is_empty() { "POST" } else { method },
+            host,
+            path: if path.is_empty() { "/" } else { path },
+            detail_1_label: "Protection Gate",
+            detail_1_value: if reason.is_empty() { "Uncategorized POST Restriction" } else { reason },
+            detail_2_label: "Category",
+            detail_2_value: "uncategorized",
+            user: match user {
+                Some(u) if !u.is_empty() => u,
+                _ => "unknown",
+            },
+            client_ip,
+            timestamp,
+            request_url: "#",
+            request_label: "Request domain verification",
+            ref_id,
+            node,
+        }
+    }
+
+    /// Factory for risky / suspicious TLD blocks.
+    pub fn for_risky_tld(
+        host: &'a str,
+        path: &'a str,
+        method: &'a str,
+        tld: &'a str,
+        user: Option<&'a str>,
+        client_ip: &'a str,
+        timestamp: &'a str,
+        ref_id: &'a str,
+        node: &'a str,
+    ) -> Self {
+        Self {
+            reason_type: "threat",
+            eyebrow: "High-Risk Domain Extension",
+            title: "Access to high-risk TLD blocked",
+            message: "Conduit blocked access to this destination because its top-level domain is classified as high-risk or heavily abused for malware, phishing, and command-and-control operations.",
+            method: if method.is_empty() { "GET" } else { method },
+            host,
+            path: if path.is_empty() { "/" } else { path },
+            detail_1_label: "Blocked TLD",
+            detail_1_value: if tld.is_empty() { "Suspicious TLD" } else { tld },
+            detail_2_label: "Risk Level",
+            detail_2_value: "High (Known Abuse)",
+            user: match user {
+                Some(u) if !u.is_empty() => u,
+                _ => "unknown",
+            },
+            client_ip,
+            timestamp,
+            request_url: "#",
+            request_label: "Report a false positive",
+            ref_id,
+            node,
+        }
+    }
+
     /// Render the block page HTML with all placeholders escaped.
     pub fn render(&self, custom_template: Option<&str>) -> String {
         let template = custom_template.unwrap_or(DEFAULT_BLOCK_PAGE);
@@ -453,6 +527,50 @@ mod tests {
         assert!(html.contains("package/Math_Symbol.js"));
         assert!(html.contains("registry.npmjs.org"));
         assert!(html.contains("/keyv/-/keyv-4.5.4.tgz"));
+        assert!(!html.contains("{{"));
+    }
+
+    #[test]
+    fn test_render_post_protection_block() {
+        let ctx = BlockPageContext::for_post_protection(
+            "unknown-api-exfil.xyz",
+            "/v1/upload",
+            "POST",
+            "Uncategorized domain with risky TLD",
+            Some("dan"),
+            "10.0.4.18",
+            "2026-10-05 12:00:00",
+            "cnd-post-1234",
+            "conduit-01",
+        );
+
+        let html = ctx.render(None);
+        assert!(html.contains("Write request blocked to unverified domain"));
+        assert!(html.contains("unknown-api-exfil.xyz"));
+        assert!(html.contains("/v1/upload"));
+        assert!(html.contains("POST"));
+        assert!(html.contains("uncategorized"));
+        assert!(!html.contains("{{"));
+    }
+
+    #[test]
+    fn test_render_risky_tld_block() {
+        let ctx = BlockPageContext::for_risky_tld(
+            "bad-phish.tk",
+            "/login",
+            "GET",
+            "tk",
+            Some("dan"),
+            "10.0.4.18",
+            "2026-10-05 12:00:00",
+            "cnd-tld-5678",
+            "conduit-01",
+        );
+
+        let html = ctx.render(None);
+        assert!(html.contains("Access to high-risk TLD blocked"));
+        assert!(html.contains("bad-phish.tk"));
+        assert!(html.contains(".tk") || html.contains("tk"));
         assert!(!html.contains("{{"));
     }
 

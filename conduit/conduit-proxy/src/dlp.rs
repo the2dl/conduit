@@ -258,6 +258,7 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
             &[
                 "*.anthropic.com",
                 "*.claude.ai",
+                "*.claude.com",
                 "*.openai.com",
                 "*.chatgpt.com",
                 "*.oaistatic.com",
@@ -280,8 +281,16 @@ fn compile_from_config(config: &DlpConfig, default_action: DlpAction) -> Vec<Com
                 "*.quay.io",
             ],
         ),
-        ("openai_key", r"\bsk-(?:proj-)?[a-zA-Z0-9_-]{32,}\b", &[]),
-        ("anthropic_key", r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b", &[]),
+        (
+            "anthropic_key",
+            r"\bsk-ant-[a-zA-Z0-9_-]{32,}\b",
+            &["*.anthropic.com", "*.claude.ai", "*.claude.com"],
+        ),
+        (
+            "openai_key",
+            r"\bsk-(?:(?:proj-|admin-|svcacct-)[a-zA-Z0-9_-]{32,}|[a-zA-Z0-9]{32,})\b",
+            &["*.openai.com", "*.chatgpt.com"],
+        ),
         (
             "slack_token",
             r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*\b",
@@ -555,6 +564,34 @@ mod tests {
         let matches = engine.scan(body, None);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].pattern_name, "openai_key");
+
+        // Allowed on openai domains
+        assert!(engine.scan(body, Some("api.openai.com")).is_empty());
+        assert!(engine.scan(body, Some("chatgpt.com")).is_empty());
+    }
+
+    #[test]
+    fn test_anthropic_key_detection() {
+        let engine = DlpEngine::new(&test_config("block"));
+        let body = b"sk-ant-api03-1234567890abcdefghijklmnopqrstuvwxyz123456";
+        let matches_untrusted = engine.scan(body, Some("evil-site.com"));
+        assert!(!matches_untrusted.is_empty());
+        assert_eq!(matches_untrusted[0].pattern_name, "anthropic_key");
+
+        // Exempt on Anthropic and Claude domains
+        assert!(engine.scan(body, Some("api.anthropic.com")).is_empty());
+        assert!(engine.scan(body, Some("claude.ai")).is_empty());
+        assert!(engine.scan(body, Some("platform.claude.com")).is_empty());
+    }
+
+    #[test]
+    fn test_dlp_global_allowed_domains() {
+        let mut cfg = test_config("block");
+        cfg.allowed_domains = vec!["*.claude.com".into(), "*.anthropic.com".into()];
+        let engine = DlpEngine::new(&cfg);
+        assert!(engine.is_domain_allowed("platform.claude.com"));
+        assert!(engine.is_domain_allowed("api.anthropic.com"));
+        assert!(!engine.is_domain_allowed("other.com"));
     }
 
     #[test]
