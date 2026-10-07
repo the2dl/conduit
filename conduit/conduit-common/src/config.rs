@@ -805,9 +805,12 @@ pub struct TldProtectionConfig {
     /// Additional custom blocked TLDs configured by administrator (without leading dots, e.g. "top", "xyz").
     #[serde(default)]
     pub blocked_tlds: Vec<String>,
-    /// Custom trusted/exempt TLDs that override the known-bad list.
+    /// Custom trusted/exempt TLDs that override the known-bad list (may also contain specific exempt domains e.g. "caido.download").
     #[serde(default)]
     pub trusted_tlds: Vec<String>,
+    /// Explicit domain exemptions exempt from TLD protection blocking.
+    #[serde(default)]
+    pub exempt_domains: Vec<String>,
 }
 
 fn default_block_action() -> String {
@@ -822,37 +825,66 @@ impl Default for TldProtectionConfig {
             block_bad_tlds: true,
             blocked_tlds: Vec::new(),
             trusted_tlds: Vec::new(),
+            exempt_domains: Vec::new(),
         }
     }
 }
 
 impl TldProtectionConfig {
-    /// Determine whether a given TLD is considered blocked under this policy.
-    pub fn is_tld_blocked(&self, tld: &str, is_known_bad: bool) -> bool {
+    /// Determine whether a given host and TLD is considered blocked under this policy.
+    /// Checks domain exemptions and trusted TLD overrides before applying blocked TLD rules.
+    pub fn is_host_blocked(&self, host: &str, tld: &str, is_known_bad: bool) -> bool {
         if !self.enabled {
             return false;
         }
+
+        // 1. Domain-specific exemptions (from exempt_domains or domain-like entries in trusted_tlds)
+        let host_lower = host.trim().to_ascii_lowercase();
+        if !host_lower.is_empty() {
+            for pattern in self.exempt_domains.iter().chain(self.trusted_tlds.iter()) {
+                let pat = pattern.trim().to_ascii_lowercase();
+                if pat.contains('.') || pat.contains('*') {
+                    let pat_clean = pat.trim_start_matches('.').to_string();
+                    if matches_domain_pattern(&pat, &host_lower)
+                        || host_lower == pat_clean
+                        || host_lower.ends_with(&format!(".{pat_clean}"))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
         let tld_clean = tld.strip_prefix('.').unwrap_or(tld).to_ascii_lowercase();
-        // Explicit trusted override
+
+        // 2. Explicit trusted TLD override
         if self
             .trusted_tlds
             .iter()
-            .any(|t| t.eq_ignore_ascii_case(&tld_clean))
+            .any(|t| t.strip_prefix('.').unwrap_or(t).eq_ignore_ascii_case(&tld_clean))
         {
             return false;
         }
-        // Explicit admin blocked list
+
+        // 3. Explicit admin blocked list
         if self
             .blocked_tlds
             .iter()
-            .any(|t| t.eq_ignore_ascii_case(&tld_clean))
+            .any(|t| t.strip_prefix('.').unwrap_or(t).eq_ignore_ascii_case(&tld_clean))
         {
             return true;
         }
+
         if self.block_bad_tlds && is_known_bad {
             return true;
         }
+
         false
+    }
+
+    /// Determine whether a given TLD is considered blocked under this policy.
+    pub fn is_tld_blocked(&self, tld: &str, is_known_bad: bool) -> bool {
+        self.is_host_blocked("", tld, is_known_bad)
     }
 }
 
@@ -1445,6 +1477,7 @@ mod tests {
             block_bad_tlds: true,
             blocked_tlds: vec!["custombad".into()],
             trusted_tlds: vec!["customgood".into()],
+            exempt_domains: vec![],
         };
 
         // Known bad blocked
@@ -1456,6 +1489,33 @@ mod tests {
         assert!(!tld_cfg.is_tld_blocked("customgood", true));
         // Normal TLD not blocked
         assert!(!tld_cfg.is_tld_blocked("com", false));
+
+        // Domain-specific exemptions (e.g. caido.download on blocked .download TLD)
+        let tld_exempt_cfg = TldProtectionConfig {
+            enabled: true,
+            action: "block".into(),
+            block_bad_tlds: true,
+            blocked_tlds: vec!["download".into()],
+            trusted_tlds: vec!["caido.download".into()],
+            exempt_domains: vec![],
+        };
+        // caido.download is exempt
+        assert!(!tld_exempt_cfg.is_host_blocked("caido.download", "download", false));
+        assert!(!tld_exempt_cfg.is_host_blocked("api.caido.download", "download", false));
+        // Other hosts on .download are still blocked
+        assert!(tld_exempt_cfg.is_host_blocked("malicious.download", "download", false));
+
+        // Test explicit exempt_domains field
+        let tld_exempt_domains_cfg = TldProtectionConfig {
+            enabled: true,
+            action: "block".into(),
+            block_bad_tlds: true,
+            blocked_tlds: vec!["download".into()],
+            trusted_tlds: vec![],
+            exempt_domains: vec!["*.caido.download".into()],
+        };
+        assert!(!tld_exempt_domains_cfg.is_host_blocked("sub.caido.download", "download", false));
+        assert!(tld_exempt_domains_cfg.is_host_blocked("other.download", "download", false));
     }
 
     #[test]

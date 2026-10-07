@@ -39,6 +39,7 @@ pub struct RuntimeConfig {
     pub tld_block_bad_tlds: Option<bool>,
     pub tld_blocked_list: Option<Vec<String>>,
     pub tld_trusted_list: Option<Vec<String>>,
+    pub tld_exempt_domains: Option<Vec<String>>,
     // POST Protection overrides
     pub post_protection_enabled: Option<bool>,
     pub post_protection_action: Option<String>,
@@ -69,6 +70,7 @@ impl Default for RuntimeConfig {
             tld_block_bad_tlds: None,
             tld_blocked_list: None,
             tld_trusted_list: None,
+            tld_exempt_domains: None,
             post_protection_enabled: None,
             post_protection_action: None,
             post_browser_only: None,
@@ -109,6 +111,9 @@ impl RuntimeConfig {
         }
         if let Some(ref trusted) = self.tld_trusted_list {
             cfg.trusted_tlds = trusted.clone();
+        }
+        if let Some(ref exempt) = self.tld_exempt_domains {
+            cfg.exempt_domains = exempt.clone();
         }
         cfg
     }
@@ -243,6 +248,7 @@ async fn load_from_redis(pool: &Pool) -> anyhow::Result<RuntimeConfig> {
         tld_block_bad_tlds: parse_bool_opt("tld_block_bad_tlds"),
         tld_blocked_list: parse_list_opt("tld_blocked_list"),
         tld_trusted_list: parse_list_opt("tld_trusted_list"),
+        tld_exempt_domains: parse_list_opt("tld_exempt_domains"),
         post_protection_enabled: parse_bool_opt("post_protection_enabled"),
         post_protection_action: parse_string_opt("post_protection_action"),
         post_browser_only: parse_bool_opt("post_browser_only"),
@@ -269,6 +275,7 @@ mod tests {
             block_bad_tlds: false,
             blocked_tlds: vec!["custombad".to_string()],
             trusted_tlds: vec!["customgood".to_string()],
+            exempt_domains: vec![],
         };
 
         // When RT has None, static config applies

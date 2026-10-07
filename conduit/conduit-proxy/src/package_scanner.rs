@@ -50,7 +50,7 @@ rule cloud_metadata_credential_scraper {
 
 rule supply_chain_token_harvester {
     meta:
-        description = "Detects code harvesting developer and host secrets (npmrc, aws, ssh, vault)"
+        description = "Detects code harvesting developer and host secrets across multiple providers"
         author = "Conduit Security Gateway"
         severity = "high"
     strings:
@@ -62,7 +62,10 @@ rule supply_chain_token_harvester {
         $vault = "VAULT_TOKEN" ascii
         $whoami = "registry.npmjs.org/-/whoami" ascii
     condition:
-        2 of them
+        // Legitimate tools (like registry-auth-token or update-check) legitimately reference .npmrc and _authToken together.
+        // True token harvesters scrape across multiple provider secrets (AWS, SSH, Vault) or probe npm token validity via whoami.
+        (($npmrc or $auth_token) and ($aws_cred or $ssh_id or $ssh_ed or $vault or $whoami))
+        or (2 of ($aws_cred, $ssh_id, $ssh_ed, $vault))
 }
 
 rule reverse_shell_and_exec_dropper {
@@ -452,5 +455,94 @@ mod tests {
             "/index.html",
             Some("text/html")
         ));
+    }
+
+    #[test]
+    fn test_benign_npm_registry_auth_passes() {
+        let scanner = test_scanner();
+        // Simulates benign update-check / registry-auth-token code (like in cf@1.0.0-beta.12)
+        let files = [
+            (
+                "package/package.json",
+                br#"{"name":"cf","version":"1.0.0-beta.12"}"# as &[u8],
+            ),
+            (
+                "package/dist/auth.mjs",
+                b"const tokenKey = ':_authToken';\nconst npmrcPath = path.join(home, '.npmrc');\nexport function getAuth() { return npmrcPath; }",
+            ),
+        ];
+        let tarball = create_test_tarball(&files);
+        match scanner.scan_tarball(&tarball) {
+            PackageScanResult::Clean => {}
+            PackageScanResult::Threat(t) => {
+                panic!("Expected benign npm auth to pass clean, got threat: {:?}", t);
+            }
+        }
+    }
+
+    #[test]
+    fn test_detect_supply_chain_token_harvester_npmrc_and_aws() {
+        let scanner = test_scanner();
+        let files = [
+            (
+                "package/package.json",
+                br#"{"name":"harvester-pkg","version":"1.0.0"}"# as &[u8],
+            ),
+            (
+                "package/steal.js",
+                b"const f1 = fs.readFileSync('.npmrc'); const f2 = fs.readFileSync('.aws/credentials');",
+            ),
+        ];
+        let tarball = create_test_tarball(&files);
+        match scanner.scan_tarball(&tarball) {
+            PackageScanResult::Threat(t) => {
+                assert_eq!(t.rule_name, "supply_chain_token_harvester");
+            }
+            PackageScanResult::Clean => panic!("Expected supply_chain_token_harvester detection!"),
+        }
+    }
+
+    #[test]
+    fn test_detect_supply_chain_token_harvester_ssh_and_vault() {
+        let scanner = test_scanner();
+        let files = [
+            (
+                "package/package.json",
+                br#"{"name":"vault-ssh-harvester","version":"1.0.0"}"# as &[u8],
+            ),
+            (
+                "package/index.js",
+                b"const k = fs.readFileSync('~/.ssh/id_rsa'); const v = process.env.VAULT_TOKEN;",
+            ),
+        ];
+        let tarball = create_test_tarball(&files);
+        match scanner.scan_tarball(&tarball) {
+            PackageScanResult::Threat(t) => {
+                assert_eq!(t.rule_name, "supply_chain_token_harvester");
+            }
+            PackageScanResult::Clean => panic!("Expected supply_chain_token_harvester detection!"),
+        }
+    }
+
+    #[test]
+    fn test_detect_supply_chain_token_harvester_token_and_whoami() {
+        let scanner = test_scanner();
+        let files = [
+            (
+                "package/package.json",
+                br#"{"name":"whoami-harvester","version":"1.0.0"}"# as &[u8],
+            ),
+            (
+                "package/index.js",
+                b"const tok = parse('_authToken'); fetch('https://registry.npmjs.org/-/whoami', { headers: { Authorization: tok } });",
+            ),
+        ];
+        let tarball = create_test_tarball(&files);
+        match scanner.scan_tarball(&tarball) {
+            PackageScanResult::Threat(t) => {
+                assert_eq!(t.rule_name, "supply_chain_token_harvester");
+            }
+            PackageScanResult::Clean => panic!("Expected supply_chain_token_harvester detection!"),
+        }
     }
 }

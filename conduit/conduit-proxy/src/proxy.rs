@@ -14,7 +14,7 @@ use pingora_cache::{CacheMetaDefaults, NoCacheReason, RespCacheable};
 use pingora_core::protocols::Digest;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::Result;
-use pingora_http::ResponseHeader;
+use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -420,6 +420,20 @@ fn parse_host_port(s: &str, default_port: u16) -> (String, u16) {
     }
 }
 
+/// Returns true if the request contains authentication credentials (Authorization, Cookie, or API keys).
+/// Authenticated requests must never be cached by URL or served to other unauthenticated callers.
+pub(crate) fn request_has_auth(req: &RequestHeader) -> bool {
+    req.headers.contains_key("authorization")
+        || req.headers.contains_key("proxy-authorization")
+        || req.headers.contains_key("cookie")
+        || req.headers.contains_key("x-api-key")
+        || req.headers.contains_key("api-key")
+        || req.headers.contains_key("x-auth-token")
+        || req.headers.contains_key("x-access-token")
+        || req.headers.contains_key("x-session-token")
+        || req.headers.contains_key("token")
+}
+
 #[async_trait]
 impl ProxyHttp for ClearGateProxy {
     type CTX = RequestContext;
@@ -642,13 +656,13 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
-        // TLD Protection evaluation (skipped for allowlisted hosts)
-        if !is_allowlisted {
+        // TLD Protection evaluation (skipped for allowlisted hosts or explicitly policy-allowed destinations)
+        if !is_explicitly_allowed {
             let tld_cfg = rt_cfg.effective_tld_protection(self.config.tld_protection.as_ref());
             if tld_cfg.enabled {
                 let host_tld = crate::threat::heuristics::extract_tld(&ctx.host);
                 let is_known_bad = crate::threat::heuristics::is_bad_tld_name(host_tld);
-                if tld_cfg.is_tld_blocked(host_tld, is_known_bad) {
+                if tld_cfg.is_host_blocked(&ctx.host, host_tld, is_known_bad) {
                     let should_block = tld_cfg.action == "block" || rt_cfg.prevention_mode;
                     if should_block {
                         info!(host = %ctx.host, tld = host_tld, "Blocking request (risky TLD)");
@@ -671,10 +685,10 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
-        // POST / Write Protection for uncategorized domains
+        // POST / Write Protection for uncategorized domains (skipped for allowlisted or policy-allowed hosts)
         let is_uncategorized =
             ctx.category.is_none() || ctx.category.as_deref() == Some("uncategorized");
-        if !is_allowlisted && is_uncategorized {
+        if !is_explicitly_allowed && is_uncategorized {
             let post_cfg = rt_cfg.effective_post_protection(self.config.post_protection.as_ref());
             if post_cfg.enabled {
                 let req_method = &session.req_header().method;
@@ -784,8 +798,8 @@ impl ProxyHttp for ClearGateProxy {
             }
         }
 
-        // Threat detection (skipped for allowlisted hosts)
-        if !is_allowlisted {
+        // Threat detection (skipped for allowlisted hosts or explicitly policy-allowed destinations)
+        if !is_explicitly_allowed {
             if let Some(ref engine) = self.threat_engine {
                 let verdict = crate::threat::evaluate_request(
                     engine,
@@ -1129,9 +1143,7 @@ impl ProxyHttp for ClearGateProxy {
                 .unwrap_or(false);
 
             let req = session.req_header();
-            let has_auth = req.headers.contains_key("authorization")
-                || req.headers.contains_key("proxy-authorization")
-                || req.headers.contains_key("cookie");
+            let has_auth = request_has_auth(req);
 
             let is_auth_path = ctx.path.starts_with("/oauth")
                 || ctx.path.starts_with("/v1/oauth")
@@ -1176,9 +1188,7 @@ impl ProxyHttp for ClearGateProxy {
         _ctx: &mut Self::CTX,
     ) -> Result<RespCacheable> {
         let req = session.req_header();
-        let has_auth = req.headers.contains_key("authorization")
-            || req.headers.contains_key("proxy-authorization")
-            || req.headers.contains_key("cookie");
+        let has_auth = request_has_auth(req);
 
         // Never cache responses that set cookies (session establishment)
         if resp.headers.contains_key("set-cookie") {
@@ -1760,5 +1770,58 @@ mod tests {
         assert!(normal_entropy < post_cfg.entropy_threshold);
         let small_payload = 1024;
         assert!(small_payload <= post_cfg.max_uncategorized_body_bytes);
+    }
+
+    #[test]
+    fn test_request_has_auth() {
+        use super::request_has_auth;
+        use pingora_http::RequestHeader;
+
+        // Unauthenticated request
+        let req = RequestHeader::build("GET", b"/api/public", None).unwrap();
+        assert!(!request_has_auth(&req));
+
+        // Standard Authorization header
+        let mut req = RequestHeader::build("GET", b"/api/data", None).unwrap();
+        req.append_header("Authorization", "Bearer token123").unwrap();
+        assert!(request_has_auth(&req));
+
+        // Cookie header
+        let mut req = RequestHeader::build("GET", b"/api/data", None).unwrap();
+        req.append_header("Cookie", "session=abc").unwrap();
+        assert!(request_has_auth(&req));
+
+        // Proxy-Authorization header
+        let mut req = RequestHeader::build("GET", b"/api/data", None).unwrap();
+        req.append_header("Proxy-Authorization", "Basic dXNlcjpwYXNz").unwrap();
+        assert!(request_has_auth(&req));
+
+        // API Key headers (x-api-key, api-key, etc.)
+        let auth_header_names = [
+            "x-api-key",
+            "X-API-KEY",
+            "api-key",
+            "API-KEY",
+            "x-auth-token",
+            "x-access-token",
+            "x-session-token",
+            "token",
+        ];
+        for header_name in auth_header_names {
+            let mut req = RequestHeader::build("GET", b"/api/data", None).unwrap();
+            req.append_header(header_name, "secret-key-123").unwrap();
+            assert!(
+                request_has_auth(&req),
+                "expected header {} to be recognized as auth",
+                header_name
+            );
+        }
+
+        // Benign non-auth headers
+        let mut req = RequestHeader::build("GET", b"/api/data", None).unwrap();
+        req.append_header("Accept", "application/json").unwrap();
+        req.append_header("User-Agent", "curl/8.5.0").unwrap();
+        req.append_header("Host", "api.example.com").unwrap();
+        assert!(!request_has_auth(&req));
     }
 }

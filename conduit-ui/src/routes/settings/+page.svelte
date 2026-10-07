@@ -549,16 +549,16 @@
 				<!-- Custom Trusted List -->
 				<div class="flex items-center gap-4 p-3.5 px-4">
 					<div class="flex-1 flex flex-col gap-0.5">
-						<span class="font-medium text-[#E6E6E8] text-[13px]">Custom trusted / exempt TLDs</span>
+						<span class="font-medium text-[#E6E6E8] text-[13px]">Custom trusted / exempt TLDs & domains</span>
 						<span class="text-[#6B6B73] text-[12.5px]">
-							Comma-separated list of TLDs exempt from blocking (overrides known-bad list).
+							Comma-separated list of TLDs or specific domains exempt from blocking (e.g. caido.download, ru, cn).
 						</span>
 						<span class="font-mono text-[11px] text-[#55555C]">tld_trusted_list</span>
 					</div>
 					<div class="flex items-center gap-2">
 						<input
 							type="text"
-							placeholder="e.g. ru, cn, rs"
+							placeholder="e.g. caido.download, ru, cn"
 							bind:value={draftConfig.tld_trusted_list}
 							class="w-64 h-7 px-2 border border-[#2A2A30] rounded bg-[#0A0A0B] text-[#E6E6E8] font-mono text-xs focus:outline-none focus:border-[#ED2377]"
 						/>

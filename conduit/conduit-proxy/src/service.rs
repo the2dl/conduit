@@ -285,15 +285,15 @@ impl ClearGateService {
             }
         }
 
-        // TLD protection evaluation (skipped for allowlisted hosts)
+        // TLD protection evaluation (skipped for allowlisted hosts or explicitly policy-allowed destinations)
         let mut tld_blocked = false;
         let mut blocked_tld_name = String::new();
-        if !is_allowlisted {
+        if !is_explicitly_allowed {
             let tld_cfg = rt_cfg.effective_tld_protection(self.config.tld_protection.as_ref());
             if tld_cfg.enabled {
                 let host_tld = crate::threat::heuristics::extract_tld(&host);
                 let is_known_bad = crate::threat::heuristics::is_bad_tld_name(host_tld);
-                if tld_cfg.is_tld_blocked(host_tld, is_known_bad) {
+                if tld_cfg.is_host_blocked(&host, host_tld, is_known_bad) {
                     if tld_cfg.action == "block" || rt_cfg.prevention_mode {
                         tld_blocked = true;
                         blocked_tld_name = host_tld.to_string();
@@ -302,11 +302,11 @@ impl ClearGateService {
             }
         }
 
-        // Threat evaluation (skipped for allowlisted hosts)
+        // Threat evaluation (skipped for allowlisted hosts or explicitly policy-allowed destinations)
         let mut threat_blocked = false;
         let mut rep_blocked = false;
         let mut threat_verdict: Option<conduit_common::types::ThreatVerdict> = None;
-        if !is_allowlisted {
+        if !is_explicitly_allowed {
             if let Some(ref engine) = self.threat_engine {
                 let verdict = crate::threat::evaluate_request(
                     engine,

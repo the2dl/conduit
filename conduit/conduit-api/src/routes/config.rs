@@ -30,6 +30,7 @@ const ALLOWED_CONFIG_KEYS: &[&str] = &[
     "tld_block_bad_tlds",
     "tld_blocked_list",
     "tld_trusted_list",
+    "tld_exempt_domains",
     "post_protection_enabled",
     "post_protection_action",
     "post_browser_only",
@@ -86,6 +87,9 @@ async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .or_insert_with(|| "".into());
     config
         .entry("tld_trusted_list".into())
+        .or_insert_with(|| "".into());
+    config
+        .entry("tld_exempt_domains".into())
         .or_insert_with(|| "".into());
     config
         .entry("post_protection_enabled".into())
