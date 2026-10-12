@@ -99,6 +99,7 @@ fail_closed = true
 # [connection_limits]
 # enabled = true
 # max_connections_per_ip = 256
+# exempt_loopback = true                # loopback (127.0.0.1, ::1) exempt from limits
 
 # --- DNS Cache ---
 # [dns]

@@ -88,6 +88,7 @@ ipnet = "2"
 regex = "1"
 unicode-normalization = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
 prometheus = "0.14"
 arc-swap = "1"
 fnv = "1"

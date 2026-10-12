@@ -742,8 +742,18 @@ echo "--- 7. Auditing Host Egress Firewall Lockdown ---"
 
 if command -v nft >/dev/null 2>&1 && nft list table inet conduit_lockdown >/dev/null 2>&1; then
   log_ok "Egress firewall lockdown is active (nftables table 'conduit_lockdown')"
+  if bash "$SCRIPT_DIR/setup-firewall.sh" --repair-tailscale; then
+    log_ok "Tailscale daemon egress exception is present"
+  else
+    log_warn "Could not repair the Tailscale daemon egress exception"
+  fi
 elif iptables -C OUTPUT -p tcp -m multiport --dports 80,443 -j REJECT >/dev/null 2>&1; then
   log_ok "Egress firewall lockdown is active (iptables OUTPUT reject rules)"
+  if bash "$SCRIPT_DIR/setup-firewall.sh" --repair-tailscale; then
+    log_ok "Tailscale daemon egress exception is present"
+  else
+    log_warn "Could not repair the Tailscale daemon egress exception"
+  fi
 else
   log_info "Egress firewall is inactive (run 'sudo ./scripts/setup-firewall.sh --enable' to enforce proxying)"
 fi

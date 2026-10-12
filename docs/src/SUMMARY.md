@@ -21,6 +21,7 @@
 - [Data Loss Prevention](./features/dlp.md)
 - [Rate Limiting](./features/rate-limiting.md)
 - [HTTP Caching](./features/caching.md)
+- [Assessment Capture](./features/assessment-capture.md)
 - [Load Balancing](./features/load-balancing.md)
 - [DNS Caching](./features/dns-caching.md)
 - [Metrics & Monitoring](./features/metrics.md)
@@ -29,6 +30,7 @@
 # Management
 
 - [API Reference](./management/api.md)
+- [Guarded Upgrades & Rollback](./management/rollback.md)
 - [Web UI](./management/ui.md)
 - [Multi-Node Clustering](./management/multi-node.md)
 

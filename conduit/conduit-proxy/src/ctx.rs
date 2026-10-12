@@ -5,6 +5,7 @@ use crate::threat::heuristics::{CertMeta, SecurityHeaders};
 
 /// Per-request context carried through the Pingora filter chain.
 pub struct RequestContext {
+    pub assessment: Option<conduit_common::assessment::PendingCapture>,
     pub start_time: DateTime<Utc>,
     pub client_ip: String,
     pub identity: UserIdentity,
@@ -73,6 +74,7 @@ impl RequestContext {
         let req_id = uuid_val.to_string();
 
         Self {
+            assessment: None,
             start_time: Utc::now(),
             req_id,
             ref_id,

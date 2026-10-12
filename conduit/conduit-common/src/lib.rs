@@ -1,4 +1,5 @@
 pub mod ca;
+pub mod assessment;
 pub mod config;
 pub mod dns;
 pub mod redis;

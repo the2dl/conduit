@@ -444,6 +444,27 @@ impl ProxyHttp for ClearGateProxy {
 
     /// Main request filter — runs before upstream connection.
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
+        // Consume control headers immediately; they must never reach an origin.
+        let assessment_id = session
+            .req_header()
+            .headers
+            .get(conduit_common::assessment::RUN_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let assessment_token = session
+            .req_header()
+            .headers
+            .get(conduit_common::assessment::TOKEN_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        session
+            .downstream_session
+            .req_header_mut()
+            .remove_header(conduit_common::assessment::RUN_HEADER);
+        session
+            .downstream_session
+            .req_header_mut()
+            .remove_header(conduit_common::assessment::TOKEN_HEADER);
         // Check request header size limit (approximate — excludes request line)
         if let Some(ref limits) = self.config.request_limits {
             if limits.max_request_header_size > 0 {
@@ -571,6 +592,55 @@ impl ProxyHttp for ClearGateProxy {
                 session.write_response_header(Box::new(resp), true).await?;
                 ctx.response_status = 407;
                 return Ok(true);
+            }
+        }
+
+        if let (Some(id), Some(token)) = (assessment_id, assessment_token) {
+            use conduit_common::assessment::{self, CapturedFlow, CapturedMessage, PendingCapture};
+            if let Ok(Some(capture_session)) = assessment::load_session(&self.pool, &id).await {
+                let scoped = assessment::origin(&ctx.full_url())
+                    .ok()
+                    .is_some_and(|origin| capture_session.origins.contains(&origin));
+                if !ctx.is_connect
+                    && scoped
+                    && capture_session.expires_at > chrono::Utc::now().timestamp()
+                    && conduit_common::util::constant_time_eq(
+                        token.as_bytes(),
+                        capture_session.token.as_bytes(),
+                    )
+                {
+                    let request = session.req_header();
+                    let mut captured_request = CapturedMessage::default();
+                    captured_request.set_headers(
+                        request
+                            .headers
+                            .iter()
+                            .filter(|(name, _)| name.as_str() != "proxy-authorization")
+                            .map(|(name, value)| {
+                                (
+                                    name.to_string(),
+                                    value.to_str().unwrap_or("[non-text]").to_owned(),
+                                )
+                            }),
+                    );
+                    ctx.assessment = Some(PendingCapture {
+                        flow: CapturedFlow {
+                            id: ctx.req_id.clone(),
+                            run_id: id,
+                            timestamp: ctx.start_time.timestamp_millis(),
+                            method: request.method.to_string(),
+                            url: ctx.full_url(),
+                            status: 0,
+                            duration_ms: 0,
+                            error: None,
+                            request: captured_request,
+                            response: CapturedMessage::default(),
+                        },
+                        session: capture_session,
+                        request_body: Vec::new(),
+                        response_body: Vec::new(),
+                    });
+                }
             }
         }
 
@@ -988,6 +1058,8 @@ impl ProxyHttp for ClearGateProxy {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         upstream_request.remove_header("Proxy-Authorization");
+        upstream_request.remove_header(conduit_common::assessment::RUN_HEADER);
+        upstream_request.remove_header(conduit_common::assessment::TOKEN_HEADER);
         if !ctx.client_ip.is_empty() {
             upstream_request.insert_header("X-Forwarded-For", &ctx.client_ip)?;
         }
@@ -1007,6 +1079,9 @@ impl ProxyHttp for ClearGateProxy {
     {
         if let Some(b) = body {
             ctx.request_bytes += b.len() as u64;
+            if let Some(capture) = &mut ctx.assessment {
+                capture.append(false, b);
+            }
             ctx.request_body_accumulated += b.len();
 
             // Request body size limit — send a clean 413 response before returning error
@@ -1117,6 +1192,9 @@ impl ProxyHttp for ClearGateProxy {
 
     /// Enable caching for cacheable GET/HEAD requests.
     fn request_cache_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
+        if ctx.assessment.is_some() {
+            return Ok(());
+        }
         if let Some(storage) = self.cache_storage {
             // Skip cache for load-balanced domains — each request must reach upstream
             // for round-robin distribution to work.
@@ -1185,7 +1263,7 @@ impl ProxyHttp for ClearGateProxy {
         &self,
         session: &Session,
         resp: &ResponseHeader,
-        _ctx: &mut Self::CTX,
+        ctx: &mut Self::CTX,
     ) -> Result<RespCacheable> {
         let req = session.req_header();
         let has_auth = request_has_auth(req);
@@ -1195,6 +1273,22 @@ impl ProxyHttp for ClearGateProxy {
             return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
                 "set-cookie",
             )));
+        }
+
+        // Never cache package downloads that will be inspected/buffered by PackageScanner
+        if let Some(ref scanner) = self.package_scanner {
+            if scanner.enabled {
+                let ct = resp.headers.get("content-type").and_then(|v| v.to_str().ok());
+                if crate::package_scanner::PackageScanner::is_package_download(
+                    &ctx.host,
+                    &ctx.path,
+                    ct,
+                ) {
+                    return Ok(RespCacheable::Uncacheable(NoCacheReason::Custom(
+                        "package_scan",
+                    )));
+                }
+            }
         }
 
         let cc = CacheControl::from_resp_headers(resp);
@@ -1299,6 +1393,18 @@ impl ProxyHttp for ClearGateProxy {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         ctx.response_status = upstream_response.status.as_u16();
+        if let Some(capture) = &mut ctx.assessment {
+            capture
+                .flow
+                .response
+                .set_headers(upstream_response.headers.iter().map(|(name, value)| {
+                    (
+                        name.to_string(),
+                        value.to_str().unwrap_or("[non-text]").to_owned(),
+                    )
+                }));
+            upstream_response.insert_header("X-Conduit-Flow-Id", &capture.flow.id)?;
+        }
 
         if ctx.cache_enabled {
             let status = session.cache.phase().as_str();
@@ -1397,10 +1503,6 @@ impl ProxyHttp for ClearGateProxy {
             {
                 ctx.is_package_download = true;
                 ctx.package_body_buffer = Some(Vec::with_capacity(65536));
-                if ctx.cache_enabled {
-                    session.cache.disable(NoCacheReason::Custom("package_scan"));
-                    ctx.cache_enabled = false;
-                }
             }
         }
 
@@ -1416,6 +1518,9 @@ impl ProxyHttp for ClearGateProxy {
     ) -> Result<Option<std::time::Duration>> {
         if let Some(b) = body {
             ctx.response_bytes += b.len() as u64;
+            if let Some(capture) = &mut ctx.assessment {
+                capture.append(true, b);
+            }
 
             if let Some(ref mut buf) = ctx.threat_inspect_buffer {
                 let max = self
@@ -1620,6 +1725,18 @@ impl ProxyHttp for ClearGateProxy {
         ctx: &mut Self::CTX,
     ) {
         let method = session.req_header().method.to_string();
+        let request_headers = conduit_common::types::RequestLogHeaders::from_headers(&session.req_header().headers);
+        if let Some(mut capture) = ctx.assessment.take() {
+            capture.flow.status = ctx.response_status;
+            capture.flow.duration_ms = ctx.duration_ms();
+            capture.flow.error = _e.map(|error| error.to_string());
+            let (capture_session, flow) = capture.finish();
+            if let Err(error) =
+                conduit_common::assessment::store_flow(&self.pool, &capture_session, &flow).await
+            {
+                tracing::warn!(run_id = %capture_session.id, "assessment capture could not be stored: {error}");
+            }
+        }
 
         // Record Prometheus metrics
         let action_str = format!("{:?}", ctx.action).to_lowercase();
@@ -1648,6 +1765,8 @@ impl ProxyHttp for ClearGateProxy {
             port: ctx.port,
             path: ctx.path.clone(),
             full_url: ctx.full_url(),
+            referer: request_headers.referer,
+            user_agent: request_headers.user_agent,
             category: ctx.category.clone(),
             action: ctx.action,
             rule_id: ctx.rule_id.clone(),

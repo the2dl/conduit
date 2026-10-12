@@ -110,6 +110,7 @@ upgrade_sock = "/tmp/conduit-upgrade.sock"
 [connection_limits]
 enabled = true
 max_connections_per_ip = 1024         # per-IP concurrent connection cap
+exempt_loopback = true                # loopback (127.0.0.1, ::1) exempt from limits
 
 # --- DNS Cache ---
 [dns]

@@ -40,6 +40,10 @@ PUT    /api/dlp/:id           # Update a DLP rule
 DELETE /api/dlp/:id           # Delete a DLP rule
 ```
 
+### Assessment capture and replay
+
+Authenticated, expiring sessions can capture scoped request/response payloads and replay them with mutations. See [assessment capture](../features/assessment-capture.md) for encryption setup, tagging, limits, and endpoint schemas. Routes live under `/api/v1/assessments`.
+
 ### Logs
 
 ```

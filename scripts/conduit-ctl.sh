@@ -109,6 +109,18 @@ case "${1:-status}" in
     start) start ;;
     stop) stop ;;
     restart) restart ;;
+    rollback)
+        if [ "$MODE" = system ] && [ "$EUID" -ne 0 ]; then
+            exec sudo /usr/bin/bash /var/lib/conduit/deployments/previous/worker.sh rollback /var/lib/conduit/deployments/previous
+        fi
+        if [ "$MODE" = system ]; then
+            CHECKPOINT=/var/lib/conduit/deployments/previous
+        else
+            CHECKPOINT="${XDG_STATE_HOME:-$HOME/.local/state}/conduit/deployments/previous"
+        fi
+        [ -f "$CHECKPOINT/worker.sh" ] || { echo "No verified rollback checkpoint available." >&2; exit 1; }
+        exec /usr/bin/bash "$CHECKPOINT/worker.sh" rollback "$CHECKPOINT"
+        ;;
     status) status ;;
     fix|repair)
         if [ "$EUID" -ne 0 ]; then
@@ -123,5 +135,5 @@ case "${1:-status}" in
     uninstall|purge)
         exec "$DIR/scripts/uninstall.sh" --purge
         ;;
-    *) echo "Usage: $0 {start|stop|restart|status|fix|disable|uninstall}" ;;
+    *) echo "Usage: $0 {start|stop|restart|rollback|status|fix|disable|uninstall}" ;;
 esac

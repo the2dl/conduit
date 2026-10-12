@@ -22,3 +22,5 @@ once_cell = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 ipnet = { workspace = true }
+url = { workspace = true }
+http = { workspace = true }

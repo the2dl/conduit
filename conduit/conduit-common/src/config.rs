@@ -483,6 +483,20 @@ pub struct ConnectionLimitConfig {
     /// Max concurrent connections per IP (0 = unlimited).
     #[serde(default)]
     pub max_connections_per_ip: u32,
+    /// When true (default), loopback connections (127.0.0.0/8, ::1, localhost) are exempt
+    /// from connection limits so local host services are never locked out.
+    #[serde(default = "default_true")]
+    pub exempt_loopback: bool,
+}
+
+impl Default for ConnectionLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_connections_per_ip: 0,
+            exempt_loopback: true,
+        }
+    }
 }
 
 /// DNS caching configuration.

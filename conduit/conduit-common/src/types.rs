@@ -15,6 +15,12 @@ pub struct LogEntry {
     pub port: u16,
     pub path: String,
     pub full_url: String,
+    /// Incoming HTTP Referer header, when the client supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referer: Option<String>,
+    /// Incoming HTTP User-Agent header, when the client supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
     pub category: Option<String>,
     pub action: PolicyAction,
     pub rule_id: Option<String>,
@@ -56,6 +62,84 @@ pub struct LogEntry {
     /// DLP pattern names that matched on the request body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dlp_matches: Option<Vec<String>>,
+}
+
+/// Request metadata retained for logging, including CONNECT tunnel completion.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLogHeaders {
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl RequestLogHeaders {
+    pub fn from_headers(headers: &http::HeaderMap) -> Self {
+        Self {
+            referer: headers
+                .get(http::header::REFERER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+            user_agent: headers
+                .get(http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_log_tests {
+    use super::*;
+
+    #[test]
+    fn captures_headers_case_insensitively_and_ignores_invalid_text() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "ReFeReR".parse::<http::HeaderName>().unwrap(),
+            "https://example.com/parent?q=1".parse().unwrap(),
+        );
+        headers.insert("User-Agent", "Mozilla/5.0 test browser".parse().unwrap());
+        let metadata = RequestLogHeaders::from_headers(&headers);
+        assert_eq!(
+            metadata.referer.as_deref(),
+            Some("https://example.com/parent?q=1")
+        );
+        assert_eq!(
+            metadata.user_agent.as_deref(),
+            Some("Mozilla/5.0 test browser")
+        );
+        headers.insert(
+            "user-agent",
+            http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        assert!(RequestLogHeaders::from_headers(&headers)
+            .user_agent
+            .is_none());
+        let empty = RequestLogHeaders::from_headers(&http::HeaderMap::new());
+        assert!(empty.referer.is_none() && empty.user_agent.is_none());
+    }
+
+    #[test]
+    fn old_logs_decode_and_new_headers_serialize_to_top_level_fields() {
+        let legacy = serde_json::json!({
+            "id": "test", "timestamp": "2026-10-08T12:00:00Z", "client_ip": "127.0.0.1",
+            "method": "GET", "scheme": "https", "host": "example.com", "port": 443,
+            "path": "/child", "full_url": "https://example.com/child", "action": "allow",
+            "status_code": 200, "request_bytes": 0, "response_bytes": 10, "duration_ms": 1,
+            "tls_intercepted": true
+        });
+        let mut entry: LogEntry = serde_json::from_value(legacy).unwrap();
+        assert!(entry.referer.is_none() && entry.user_agent.is_none());
+        let serialized = serde_json::to_value(&entry).unwrap();
+        assert!(serialized.get("referer").is_none() && serialized.get("user_agent").is_none());
+        entry.referer = Some("https://example.com/parent".into());
+        entry.user_agent = Some("Mozilla/5.0".into());
+        let serialized = serde_json::to_value(&entry).unwrap();
+        assert_eq!(serialized["referer"], "https://example.com/parent");
+        assert_eq!(serialized["user_agent"], "Mozilla/5.0");
+        let restored: LogEntry = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.referer, entry.referer);
+        assert_eq!(restored.user_agent, entry.user_agent);
+    }
 }
 
 /// How the user was identified.

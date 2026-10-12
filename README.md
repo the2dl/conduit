@@ -11,6 +11,7 @@ Conduit is an enterprise-grade local and edge security gateway designed for endp
 ### Key Capabilities
 
 - **Pingora-Powered Proxy**: Built on Cloudflare's async Pingora engine with dynamic per-domain TLS certificate generation, HTTP/1.1 & HTTP/2 downstream support, and response caching.
+- **Assessment Capture & Replay**: Opt-in scoped HTTP capture, encrypted expiring payload storage, searchable flows, and authenticated replay with mutations. See [assessment capture](docs/src/features/assessment-capture.md).
 - **Native Valkey Datastore**: Zero Docker required. Uses [Valkey](https://valkey.io/) (the open-source BSD-3-Clause Redis continuation under the Linux Foundation) on standard port `6379`, with transparent compatibility for Redis and Dragonfly.
 - **Multi-Distribution Turnkey Installer**: One-command automated installation for **Arch Linux**, **Debian / Ubuntu**, **Fedora / RHEL**, and **Omarchy**.
 - **Host Egress Firewall Lockdown**: Kernel-level `nftables` or `iptables` lockdown enforcing that all outbound ports 80/443 on the machine must route through Conduit—preventing bypass by rogue scripts or malware.

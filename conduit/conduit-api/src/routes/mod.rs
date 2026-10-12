@@ -1,4 +1,5 @@
 pub mod ca;
+pub mod assessment;
 pub mod categories;
 pub mod config;
 pub mod dlp;
@@ -161,7 +162,10 @@ pub fn build_router(state: Arc<AppState>, limiter: Arc<ApiRateLimiter>) -> Route
         .route_layer(middleware::from_fn(audit_log))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_auth));
 
-    let api = Router::new().merge(public_api).merge(protected_api);
+    let api = Router::new()
+        .merge(public_api)
+        .merge(protected_api)
+        .merge(assessment::routes(state.clone()));
 
     let mut router = Router::new()
         .nest("/api/v1", api)

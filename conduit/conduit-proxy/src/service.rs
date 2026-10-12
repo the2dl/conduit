@@ -137,6 +137,7 @@ impl ClearGateService {
         shutdown: &ShutdownWatch,
     ) -> Option<Stream> {
         let req_header = session.req_header();
+        let request_headers = conduit_common::types::RequestLogHeaders::from_headers(&req_header.headers);
         let target = if let Some(auth) = req_header.uri.authority() {
             auth.as_str()
         } else if let Some(host_hdr) = req_header.headers.get("Host").and_then(|h| h.to_str().ok())
@@ -258,6 +259,8 @@ impl ClearGateService {
                         port,
                         path: "/".into(),
                         full_url: format!("https://{host}:{port}/"),
+                        referer: request_headers.referer.clone(),
+                        user_agent: request_headers.user_agent.clone(),
                         category: category.clone(),
                         action: PolicyAction::Block,
                         rule_id: None,
@@ -460,6 +463,8 @@ impl ClearGateService {
                 port,
                 path: "/".into(),
                 full_url: format!("https://{host}:{port}/"),
+                referer: request_headers.referer.clone(),
+                user_agent: request_headers.user_agent.clone(),
                 category: category.clone(),
                 action: PolicyAction::Block,
                 rule_id: rule_id.clone(),
@@ -509,6 +514,7 @@ impl ClearGateService {
 
         tunnel::handle_connect_tunnel(
             raw_stream,
+            request_headers,
             host,
             port,
             self.cert_cache.clone(),

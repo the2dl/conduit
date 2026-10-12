@@ -85,9 +85,16 @@ fn format_rfc5424(entry: &LogEntry) -> String {
             .map(|r| r.to_string())
             .unwrap_or_else(|| "-".to_string()),
     );
+    let mut request_headers = String::new();
+    if let Some(referer) = &entry.referer {
+        request_headers.push_str(&format!(" referer=\"{}\"", escape_sd_value(referer)));
+    }
+    if let Some(user_agent) = &entry.user_agent {
+        request_headers.push_str(&format!(" user_agent=\"{}\"", escape_sd_value(user_agent)));
+    }
 
     format!(
-        "<{}>1 {} cleargate cleargate-proxy - - [meta action=\"{}\" category=\"{}\" user=\"{}\" node_id=\"{}\" node_name=\"{}\" block_reason=\"{}\"] {} {} {} {}",
+        "<{}>1 {} cleargate cleargate-proxy - - [meta action=\"{}\" category=\"{}\" user=\"{}\" node_id=\"{}\" node_name=\"{}\" block_reason=\"{}\"{}] {} {} {} {}",
         priority,
         timestamp,
         action,
@@ -96,9 +103,31 @@ fn format_rfc5424(entry: &LogEntry) -> String {
         node_id,
         node_name,
         block_reason,
+        request_headers,
         method,
         url,
         entry.status_code,
         entry.duration_ms,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_headers_are_escaped_in_syslog_structured_data() {
+        let entry: LogEntry = serde_json::from_value(serde_json::json!({
+            "id": "test", "timestamp": "2026-10-08T12:00:00Z", "client_ip": "127.0.0.1",
+            "method": "GET", "scheme": "https", "host": "example.com", "port": 443,
+            "path": "/child", "full_url": "https://example.com/child", "action": "allow",
+            "status_code": 200, "request_bytes": 0, "response_bytes": 10, "duration_ms": 1,
+            "tls_intercepted": true, "referer": "https://example.com/parent",
+            "user_agent": "agent\"x]y"
+        }))
+        .unwrap();
+        let message = format_rfc5424(&entry);
+        assert!(message.contains("referer=\"https://example.com/parent\""));
+        assert!(message.contains("user_agent=\"agent\\\"x\\]y\""));
+    }
 }

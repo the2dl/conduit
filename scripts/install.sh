@@ -329,6 +329,26 @@ else
   echo " warning: Port 6380 not responding yet. Proceeding with installation..."
 fi
 
+# Save user-mode binaries before cargo replaces target/release; system binaries
+# are also checkpointed before any service/config deployment changes.
+ROLLBACK_STATE=""
+ROLLBACK_GUARD=(bash "$SCRIPT_DIR/rollback-deploy.sh")
+if [ "$INSTALL_MODE" = system ] && [ -n "$SUDO" ]; then
+  ROLLBACK_GUARD=("$SUDO" bash "$SCRIPT_DIR/rollback-deploy.sh")
+fi
+ROLLBACK_STATE=$("${ROLLBACK_GUARD[@]}" checkpoint "$INSTALL_MODE" "$ROOT_DIR" "${CONDUIT_DEPLOY_CHECK_URL:-https://example.com/}")
+rollback_on_exit() {
+  local result=$?
+  trap - EXIT
+  if [ "$result" -ne 0 ] && [ -n "$ROLLBACK_STATE" ]; then
+    "${ROLLBACK_GUARD[@]}" rollback "$ROLLBACK_STATE" || true
+  fi
+  exit "$result"
+}
+trap rollback_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ── 5. Compile Conduit UI & Release Binaries ──────────────────────────
 if [ "$SKIP_BUILD" = false ]; then
   echo ""
@@ -356,6 +376,11 @@ else
   echo "--- Skipping compilation (--skip-build) ---"
 fi
 
+# Arm a watchdog owned by systemd before touching deployed files/services.
+if [ -n "$ROLLBACK_STATE" ]; then
+  "${ROLLBACK_GUARD[@]}" arm "$ROLLBACK_STATE" "$$"
+fi
+
 # ── 6. Installation (System or User) ──────────────────────────────────
 if [ "$INSTALL_MODE" = "system" ]; then
   echo ""
@@ -376,13 +401,14 @@ if [ "$INSTALL_MODE" = "system" ]; then
   echo "  Creating system directories (/etc/conduit, /var/lib/conduit, /var/log/conduit)..."
   $SUDO mkdir -p /usr/local/bin /etc/conduit /etc/conduit/ca /var/lib/conduit /var/lib/conduit/ui /var/log/conduit
 
-  # Stop running services before updating binaries to prevent "Text file busy"
-  $SUDO systemctl stop conduit-proxy.service conduit-api.service 2>/dev/null || true
-
-  # Copy binaries
+  # Stage beside each installed executable, then rename atomically. Existing
+  # processes keep their old executable until the guarded restart below.
   echo "  Installing binaries to /usr/local/bin..."
-  $SUDO install -m 755 "$ROOT_DIR/target/release/conduit-api" /usr/local/bin/conduit-api
-  $SUDO install -m 755 "$ROOT_DIR/target/release/conduit-proxy" /usr/local/bin/conduit-proxy
+  for DEPLOY_BIN in conduit-api conduit-proxy; do
+    DEPLOY_STAGE=$($SUDO mktemp "/usr/local/bin/.${DEPLOY_BIN}.XXXXXX")
+    $SUDO install -m 755 "$ROOT_DIR/target/release/$DEPLOY_BIN" "$DEPLOY_STAGE"
+    $SUDO mv -fT "$DEPLOY_STAGE" "/usr/local/bin/$DEPLOY_BIN"
+  done
   $SUDO install -m 755 "$ROOT_DIR/scripts/conduit-ctl.sh" /usr/local/bin/conduit-ctl
 
   # Copy UI build
@@ -469,6 +495,7 @@ else
   cp "$ROOT_DIR/deploy/systemd/user/"* "$HOME/.config/systemd/user/"
   systemctl --user daemon-reload
   systemctl --user enable --now conduit-api.service conduit-proxy.service conduit.target
+  systemctl --user restart conduit-api.service conduit-proxy.service
   echo "  Systemd user services enabled and started."
 fi
 
@@ -523,6 +550,15 @@ if [ "$API_READY" != true ] || [ "$PROXY_READY" != true ]; then
   echo " Direct internet access remains unaffected."
   echo "========================================================"
   SYSTEM_PROXY=false
+fi
+
+# A port check alone cannot prove that this endpoint still has internet access.
+# Upgrade success requires active services, healthy datastore/API, and an HTTPS
+# fetch through the proxy. EXIT trap restores immediately on failure; systemd's
+# watchdog handles a lost terminal or killed installer independently.
+if [ -n "$ROLLBACK_STATE" ]; then
+  "${ROLLBACK_GUARD[@]}" verify-commit "$ROLLBACK_STATE"
+  ROLLBACK_STATE=""
 fi
 
 # ── 9. Datastore Seeding ──────────────────────────────────────────────

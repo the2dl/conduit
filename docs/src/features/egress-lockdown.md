@@ -84,6 +84,19 @@ If a destination is explicitly allowed in `[allowlist]`, it bypasses general egr
 
 ## 4. Host-Level Egress Firewall (Default-Deny)
 
+### Tailscale daemon connectivity
+
+Tailscale also needs TCP/443 for coordination and DERP relay connections; allowing UDP/41641 alone is insufficient. Conduit's firewall script exempts TCP/80–443 sockets from the root daemon carrying Tailscale's bypass mark (`0x80000` under mask `0xff0000`). Ordinary unmarked processes still need Conduit. The mark values are defined in [Tailscale's Linux firewall constants](https://github.com/tailscale/tailscale/blob/main/tsconst/linuxfw.go).
+
+Repair an existing installation without restarting Conduit or Tailscale:
+
+```bash
+sudo ./scripts/setup-firewall.sh --repair-tailscale
+tailscale status
+```
+
+New installs and firewall re-enables include the exception, and `install.sh --fix` repairs older rules. The exception assumes the normal root-owned `tailscaled` service. It does not exempt all root web traffic or all traffic on a VPN interface.
+
 To prevent malware from bypassing Conduit via raw sockets, configure the host firewall to drop unauthorized outbound traffic.
 
 ### Option A: `nftables` Configuration (Recommended)
@@ -144,6 +157,7 @@ table inet filter {
         # ONLY permit the dedicated conduit user or service to make direct outbound HTTP/HTTPS connections.
         # All other processes must use 127.0.0.1:8888.
         skuid "conduit" tcp dport { 80, 443 } accept
+        meta skuid 0 meta mark & 0x00ff0000 == 0x00080000 tcp dport { 80, 443 } accept
 
         # If running as systemd user service, you can match systemd cgroup or UID:
         # meta cgroup "user.slice/.../conduit-proxy.service" tcp dport { 80, 443 } accept
@@ -188,6 +202,7 @@ iptables -A OUTPUT -p tcp --dport 6443 -j ACCEPT
 # 5. Allow only Conduit (UID 1000 or specific service user) to connect out on 80/443
 # Replace 'conduit' with the proxy system user
 iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -m owner --uid-owner conduit -j ACCEPT
+iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -m owner --uid-owner 0 -m mark --mark 0x80000/0xff0000 -j ACCEPT
 
 # 6. Reject everything else
 iptables -A OUTPUT -m limit --limit 5/min -j LOG --log-prefix "[EGRESS BLOCKED]: "
@@ -281,4 +296,3 @@ curl -X DELETE http://127.0.0.1:8443/api/v1/notifications/mute \
   -H "Content-Type: application/json" \
   -d '{"domain": "browser-intake-us5-datadoghq.com"}'
 ```
-

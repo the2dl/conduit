@@ -10,9 +10,11 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_proxy::HttpProxy;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
@@ -38,6 +40,7 @@ const BLOCK_PAGE_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 /// If false: passthrough mode — pipes encrypted bytes without inspection.
 pub async fn handle_connect_tunnel(
     downstream: Stream,
+    request_headers: conduit_common::types::RequestLogHeaders,
     host: String,
     port: u16,
     cert_cache: Arc<CertCache>,
@@ -134,8 +137,20 @@ pub async fn handle_connect_tunnel(
                 }
             };
 
+        let idle_timeout = match config.timeouts.as_ref() {
+            Some(t) => {
+                if t.idle_timeout_secs == 0 {
+                    None
+                } else {
+                    Some(Duration::from_secs(t.idle_timeout_secs))
+                }
+            }
+            None => Some(Duration::from_secs(300)),
+        };
+
         handle_passthrough(
             downstream,
+            request_headers,
             upstream_tcp,
             host,
             port,
@@ -148,6 +163,7 @@ pub async fn handle_connect_tunnel(
             auth_method,
             threat_score,
             threat_tier,
+            idle_timeout,
         )
         .await;
     }
@@ -360,9 +376,65 @@ async fn handle_mitm(
     debug!(host = %host, "MITM tunnel closed");
 }
 
-/// Passthrough mode: pipe encrypted bytes without inspection.
+/// Helper wrapper around an AsyncRead + AsyncWrite stream that tracks
+/// data activity (bytes transferred and monotonic timestamp of last read/write).
+struct ActivityTracker<S> {
+    inner: S,
+    last_activity_ms: Arc<AtomicU64>,
+    bytes_read: Arc<AtomicU64>,
+    bytes_written: Arc<AtomicU64>,
+    start_instant: Instant,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for ActivityTracker<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let res = Pin::new(&mut self.inner).poll_read(cx, buf);
+        let after = buf.filled().len();
+        if after > before {
+            let n = (after - before) as u64;
+            self.bytes_read.fetch_add(n, Ordering::Relaxed);
+            let elapsed_ms = self.start_instant.elapsed().as_millis() as u64;
+            self.last_activity_ms.store(elapsed_ms, Ordering::Relaxed);
+        }
+        res
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for ActivityTracker<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let res = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let Poll::Ready(Ok(n)) = &res {
+            if *n > 0 {
+                self.bytes_written.fetch_add(*n as u64, Ordering::Relaxed);
+                let elapsed_ms = self.start_instant.elapsed().as_millis() as u64;
+                self.last_activity_ms.store(elapsed_ms, Ordering::Relaxed);
+            }
+        }
+        res
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// Passthrough mode: pipe encrypted bytes without inspection, enforcing an idle timeout.
 async fn handle_passthrough(
     mut downstream: Stream,
+    request_headers: conduit_common::types::RequestLogHeaders,
     mut upstream: TcpStream,
     host: String,
     port: u16,
@@ -375,52 +447,116 @@ async fn handle_passthrough(
     auth_method: Option<AuthMethod>,
     threat_score: Option<f32>,
     threat_tier: Option<conduit_common::types::ThreatTier>,
+    idle_timeout: Option<Duration>,
 ) {
     debug!(host = %host, port, upstream_ip = %upstream_ip, "Passthrough tunnel established");
 
-    match tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await {
-        Ok((down_to_up, up_to_down)) => {
-            debug!(host = %host, port, down_to_up, up_to_down, "Passthrough tunnel completed");
+    let (down_to_up, up_to_down) = if let Some(timeout) = idle_timeout {
+        let start_instant = Instant::now();
+        let last_activity_ms = Arc::new(AtomicU64::new(0));
+        let down_read = Arc::new(AtomicU64::new(0));
+        let down_written = Arc::new(AtomicU64::new(0));
+        let up_read = Arc::new(AtomicU64::new(0));
+        let up_written = Arc::new(AtomicU64::new(0));
 
-            let entry = LogEntry {
-                id: uuid::Uuid::new_v4().to_string(),
-                timestamp: start,
-                client_ip: client_ip.to_string(),
-                username: username.map(|s| s.to_string()),
-                auth_method,
-                method: "CONNECT".into(),
-                scheme: "https".into(),
-                host: host.clone(),
-                port,
-                path: "/".into(),
-                full_url: format!("https://{host}:{port}/"),
-                category,
-                action: PolicyAction::Allow,
-                rule_id: None,
-                status_code: 200,
-                request_bytes: down_to_up,
-                response_bytes: up_to_down,
-                duration_ms: (chrono::Utc::now() - start).num_milliseconds().max(0) as u64,
-                tls_intercepted: false,
-                upstream_addr: Some(upstream_ip.to_string()),
-                content_type: None,
-                cache_status: None,
-                node_id: None,
-                node_name: None,
-                threat_score,
-                threat_tier,
-                threat_blocked: Some(false),
-                block_reason: None,
-                rule_name: None,
-                threat_signals: None,
-                dlp_matches: None,
-            };
-            log_tx.send(entry);
+        let mut tracked_down = ActivityTracker {
+            inner: downstream,
+            last_activity_ms: last_activity_ms.clone(),
+            bytes_read: down_read.clone(),
+            bytes_written: down_written,
+            start_instant,
+        };
+
+        let mut tracked_up = ActivityTracker {
+            inner: upstream,
+            last_activity_ms: last_activity_ms.clone(),
+            bytes_read: up_read.clone(),
+            bytes_written: up_written,
+            start_instant,
+        };
+
+        let timeout_ms = timeout.as_millis() as u64;
+        let check_interval = Duration::from_secs(1).max(Duration::from_secs(5).min(timeout));
+
+        let watchdog = async {
+            loop {
+                tokio::time::sleep(check_interval).await;
+                let cur_ms = start_instant.elapsed().as_millis() as u64;
+                let last_ms = last_activity_ms.load(Ordering::Relaxed);
+                if cur_ms.saturating_sub(last_ms) >= timeout_ms {
+                    return;
+                }
+            }
+        };
+
+        tokio::select! {
+            res = tokio::io::copy_bidirectional(&mut tracked_down, &mut tracked_up) => {
+                match res {
+                    Ok((d_to_u, u_to_d)) => (d_to_u, u_to_d),
+                    Err(e) => {
+                        debug!(host = %host, port, "Passthrough tunnel error: {e}");
+                        (down_read.load(Ordering::Relaxed), up_read.load(Ordering::Relaxed))
+                    }
+                }
+            }
+            _ = watchdog => {
+                debug!(
+                    host = %host,
+                    port,
+                    timeout_secs = timeout.as_secs(),
+                    "Passthrough tunnel closed: idle timeout"
+                );
+                (down_read.load(Ordering::Relaxed), up_read.load(Ordering::Relaxed))
+            }
         }
-        Err(e) => {
-            debug!(host = %host, port, "Passthrough tunnel error: {e}");
+    } else {
+        match tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await {
+            Ok((d_to_u, u_to_d)) => (d_to_u, u_to_d),
+            Err(e) => {
+                debug!(host = %host, port, "Passthrough tunnel error: {e}");
+                (0, 0)
+            }
         }
-    }
+    };
+
+    debug!(host = %host, port, down_to_up, up_to_down, "Passthrough tunnel completed");
+
+    let entry = LogEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: start,
+        client_ip: client_ip.to_string(),
+        username: username.map(|s| s.to_string()),
+        auth_method,
+        method: "CONNECT".into(),
+        scheme: "https".into(),
+        host: host.clone(),
+        port,
+        path: "/".into(),
+        full_url: format!("https://{host}:{port}/"),
+        referer: request_headers.referer,
+        user_agent: request_headers.user_agent,
+        category,
+        action: PolicyAction::Allow,
+        rule_id: None,
+        status_code: 200,
+        request_bytes: down_to_up,
+        response_bytes: up_to_down,
+        duration_ms: (chrono::Utc::now() - start).num_milliseconds().max(0) as u64,
+        tls_intercepted: false,
+        upstream_addr: Some(upstream_ip.to_string()),
+        content_type: None,
+        cache_status: None,
+        node_id: None,
+        node_name: None,
+        threat_score,
+        threat_tier,
+        threat_blocked: Some(false),
+        block_reason: None,
+        rule_name: None,
+        threat_signals: None,
+        dlp_matches: None,
+    };
+    log_tx.send(entry);
 }
 
 /// Check if an IP address is in a private/reserved range (SSRF protection).
@@ -461,3 +597,57 @@ fn is_ipv4_mapped_private(v6: &std::net::Ipv6Addr) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn test_activity_tracker_records_bytes_and_timestamp() {
+        let (client, server) = tokio::io::duplex(64);
+        let start_instant = Instant::now();
+        let last_activity_ms = Arc::new(AtomicU64::new(0));
+        let bytes_read = Arc::new(AtomicU64::new(0));
+        let bytes_written = Arc::new(AtomicU64::new(0));
+
+        let mut tracked_client = ActivityTracker {
+            inner: client,
+            last_activity_ms: last_activity_ms.clone(),
+            bytes_read: bytes_read.clone(),
+            bytes_written: bytes_written.clone(),
+            start_instant,
+        };
+
+        let mut server = server;
+
+        // Write from client to server
+        tracked_client.write_all(b"hello world").await.unwrap();
+        assert_eq!(bytes_written.load(Ordering::Relaxed), 11);
+
+        // Read on server
+        let mut buf = [0u8; 11];
+        server.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"hello world");
+
+        // Write from server to client
+        server.write_all(b"pong").await.unwrap();
+
+        let mut read_buf = [0u8; 4];
+        tracked_client.read_exact(&mut read_buf).await.unwrap();
+        assert_eq!(&read_buf, b"pong");
+        assert_eq!(bytes_read.load(Ordering::Relaxed), 4);
+    }
+
+    #[test]
+    fn test_is_private_ip() {
+        assert!(is_private_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("192.168.1.1".parse().unwrap()));
+        assert!(is_private_ip("172.16.0.1".parse().unwrap()));
+        assert!(is_private_ip("::1".parse().unwrap()));
+        assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_private_ip("1.1.1.1".parse().unwrap()));
+    }
+}
+

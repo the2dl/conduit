@@ -184,12 +184,35 @@ impl PackageScanner {
         let is_crates = host.contains("crates.io") || host.contains("static.crates.io");
         let is_rubygems = host.contains("rubygems.org");
 
+        // Crates CDN or download endpoint patterns
+        let is_crates_download = host.contains("static.crates.io")
+            || (is_crates && (path_lower.ends_with(".crate") || path_lower.contains("/download")));
+
+        // NPM tarball patterns
+        let is_npm_download = is_npm && (path_lower.ends_with(".tgz") || path_lower.contains("/-/"));
+
+        // PyPI package patterns
+        let is_pypi_download = is_pypi
+            && (path_lower.starts_with("/packages/")
+                || path_lower.ends_with(".whl")
+                || path_lower.ends_with(".tar.gz"));
+
+        // RubyGems package patterns
+        let is_rubygems_download = is_rubygems
+            && (path_lower.ends_with(".gem")
+                || path_lower.starts_with("/downloads/")
+                || path_lower.starts_with("/gems/"));
+
         // File extensions
         let has_archive_ext = path_lower.ends_with(".tgz")
             || path_lower.ends_with(".tar.gz")
             || path_lower.ends_with(".crate")
             || path_lower.ends_with(".whl")
             || path_lower.ends_with(".gem");
+
+        if is_crates_download || is_npm_download || is_pypi_download || is_rubygems_download {
+            return true;
+        }
 
         if (is_npm || is_pypi || is_crates || is_rubygems)
             && (has_archive_ext || ct_lower.contains("gzip") || ct_lower.contains("octet-stream"))
@@ -449,6 +472,16 @@ mod tests {
             "static.crates.io",
             "/crates/serde/serde-1.0.0.crate",
             Some("application/x-tar")
+        ));
+        assert!(PackageScanner::is_package_download(
+            "static.crates.io",
+            "/crates/vrl/0.36.0/download",
+            None
+        ));
+        assert!(PackageScanner::is_package_download(
+            "crates.io",
+            "/api/v1/crates/vrl/0.36.0/download",
+            None
         ));
         assert!(!PackageScanner::is_package_download(
             "example.com",
